@@ -122,6 +122,16 @@ pub async fn update_upper_stat(
             profile.view_count,
             profile.like_count
         );
+    } else {
+        info!(
+            "「{}」账号信息无变化（粉丝 {} 关注 {} 投稿 {} 播放 {} 获赞 {}），跳过记录",
+            source.upper_name,
+            profile.fan_count,
+            profile.follow_count,
+            profile.video_count,
+            profile.view_count,
+            profile.like_count
+        );
     }
     // 名字变化时同步更新动态源名称
     if source.upper_name != profile.name {
