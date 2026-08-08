@@ -87,7 +87,7 @@ jobs:
           channel=$(grep '^channel' rust-toolchain.toml | sed 's/.*= *"\(.*\)"/\1/')
           echo "value=$channel" >> $GITHUB_OUTPUT
       - name: Build binary
-        uses: houseabsolute/actions-rust-cross@v1
+        uses: houseabsolute/actions-rust-cross@v1.0.8
         with:
           command: build
           target: ${{ matrix.platform.target }}
