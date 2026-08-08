@@ -22,6 +22,8 @@ pub struct Model {
     pub comment_type: i64,
     /// 评论对象 id（basic.rid_str），用于评论接口
     pub comment_oid: String,
+    /// 发布 IP 属地（如"江苏"），可为空
+    pub location: String,
     /// 原始接口 JSON
     pub raw: Option<String>,
     pub download_status: u32,

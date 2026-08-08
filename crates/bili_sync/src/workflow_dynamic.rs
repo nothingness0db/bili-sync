@@ -80,6 +80,7 @@ pub async fn update_upper_stat(
                 || s.follow_count != profile.follow_count
                 || s.video_count != profile.video_count
                 || s.view_count != profile.view_count
+                || s.like_count != profile.like_count
         }
         None => true,
     };
@@ -93,14 +94,20 @@ pub async fn update_upper_stat(
             follow_count: Set(profile.follow_count),
             video_count: Set(profile.video_count),
             view_count: Set(profile.view_count),
+            like_count: Set(profile.like_count),
             recorded_at: Set(chrono::Utc::now().naive_utc()),
             ..Default::default()
         })
         .exec(connection)
         .await?;
         info!(
-            "「{}」账号信息更新：粉丝 {} 关注 {} 投稿 {} 播放 {}",
-            source.upper_name, profile.fan_count, profile.follow_count, profile.video_count, profile.view_count
+            "「{}」账号信息更新：粉丝 {} 关注 {} 投稿 {} 播放 {} 获赞 {}",
+            source.upper_name,
+            profile.fan_count,
+            profile.follow_count,
+            profile.video_count,
+            profile.view_count,
+            profile.like_count
         );
     }
     // 名字变化时同步更新动态源名称
@@ -173,6 +180,7 @@ async fn create_dynamic(info: &DynamicInfo, source_id: i32, connection: &Databas
         pub_ts: Set(info.pub_ts.naive_utc()),
         comment_type: Set(info.comment_type),
         comment_oid: Set(info.comment_oid.clone()),
+        location: Set(info.location.clone()),
         raw: Set(Some(info.raw.to_string())),
         download_status: Set(0),
         path: Set(String::new()),
@@ -275,6 +283,7 @@ async fn process_dynamic(
         pub_ts: dyn_model.pub_ts.and_utc(),
         comment_type: 0,
         comment_oid: String::new(),
+        location: dyn_model.location.clone(),
         raw: Value::Null,
     };
     fs::write(dir.join("content.md"), render_dynamic_md(&info, &source.upper_name)).await?;

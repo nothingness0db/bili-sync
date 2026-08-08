@@ -10,6 +10,9 @@ pub fn render_dynamic_md(info: &DynamicInfo, upper_name: &str) -> String {
         info.dyn_type,
         info.pub_ts.format("%Y-%m-%d %H:%M:%S")
     ));
+    if !info.location.is_empty() {
+        out.push_str(&format!("- 发布位置: {}\n", info.location));
+    }
     if let Some(comment) = info.stat["comment"]["count"].as_i64() {
         out.push_str(&format!("- 评论数: {comment}\n"));
     }

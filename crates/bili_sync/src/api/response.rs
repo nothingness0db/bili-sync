@@ -39,6 +39,7 @@ pub struct StatPoint {
     pub follow_count: i64,
     pub video_count: i64,
     pub view_count: i64,
+    pub like_count: i64,
 }
 
 #[derive(Serialize)]
@@ -72,6 +73,7 @@ pub struct DynamicDetailResponse {
     pub pics: Vec<String>,
     pub stat: serde_json::Value,
     pub pub_ts: DateTime,
+    pub location: String,
     pub path: String,
     /// 顶级评论（含楼中楼）
     pub replies: Vec<ReplyItem>,

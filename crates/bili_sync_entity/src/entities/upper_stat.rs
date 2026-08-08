@@ -16,6 +16,7 @@ pub struct Model {
     pub follow_count: i64,
     pub video_count: i64,
     pub view_count: i64,
+    pub like_count: i64,
     pub recorded_at: DateTime,
 }
 

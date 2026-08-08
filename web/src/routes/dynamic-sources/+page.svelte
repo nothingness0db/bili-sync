@@ -63,6 +63,24 @@
 		showAddDialog = true;
 	}
 
+	// 从空间页 URL 中解析 mid，支持粘贴整条链接
+	function handleUpperInput(value: string) {
+		const urlMatch = value.match(/space\.bilibili\.com\/(\d+)/) || value.match(/bilibili\.com\/opus\/(\d+)/);
+		if (urlMatch) {
+			// opus 链接里的数字是动态 id 不是 mid，仅 space 链接可用
+			if (value.includes('space.bilibili.com')) {
+				addForm.upper_id = urlMatch[1];
+				return;
+			}
+		}
+		// 纯数字直接保留
+		if (/^\d+$/.test(value.trim())) {
+			addForm.upper_id = value.trim();
+		} else {
+			addForm.upper_id = '';
+		}
+	}
+
 	async function handleAdd() {
 		if (!addForm.upper_id || !addForm.path.trim()) {
 			toast.error('请填写完整的动态源信息');
@@ -321,11 +339,15 @@
 					<Label for="upper_id" class="text-sm font-medium">UP 主 ID (mid)</Label>
 					<Input
 						id="upper_id"
-						type="number"
-						bind:value={addForm.upper_id}
-						placeholder="请输入 UP 主 ID"
+						type="text"
+						value={addForm.upper_id}
+						oninput={(e) => handleUpperInput(e.currentTarget.value)}
+						placeholder="输入 UP 主 ID，或粘贴空间页链接（space.bilibili.com/xxx）"
 						class="mt-1"
 					/>
+					<p class="text-muted-foreground mt-1 text-xs">
+						支持粘贴完整链接自动解析，如 https://space.bilibili.com/495335682/dynamic
+					</p>
 				</div>
 				<div>
 					<Label for="path" class="text-sm font-medium">保存路径</Label>

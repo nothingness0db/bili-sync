@@ -126,6 +126,7 @@ pub async fn get_dynamic_source_stats(
             follow_count: s.follow_count,
             video_count: s.video_count,
             view_count: s.view_count,
+            like_count: s.like_count,
         })
         .collect::<Vec<_>>();
     // 名字/签名版本历史：值发生变化时视为新版本
@@ -249,6 +250,7 @@ pub async fn get_dynamic_detail(
         pics,
         stat: dyn_model.stat.clone().unwrap_or(serde_json::Value::Null),
         pub_ts: dyn_model.pub_ts,
+        location: dyn_model.location.clone(),
         path: dyn_model.path.clone(),
         replies: top_replies,
     }))

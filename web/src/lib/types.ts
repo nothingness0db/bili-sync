@@ -269,6 +269,7 @@ export interface StatPoint {
 	followCount: number;
 	videoCount: number;
 	viewCount: number;
+	likeCount: number;
 }
 
 export interface UpperVersion {
@@ -314,6 +315,7 @@ export interface DynamicDetailResponse {
 	pics: string[];
 	stat: Record<string, unknown>;
 	pubTs: string;
+	location: string;
 	path: string;
 	replies: ReplyItem[];
 }

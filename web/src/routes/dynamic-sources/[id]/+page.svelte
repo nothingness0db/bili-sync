@@ -65,12 +65,13 @@
 		return v?.count ?? 0;
 	}
 
-	// 指标配置（四个折线图）
+	// 指标配置（五个折线图）
 	const METRICS = [
 		{ key: 'fanCount', label: '粉丝数', color: 'var(--primary)' },
 		{ key: 'followCount', label: '关注数', color: '#22c55e' },
 		{ key: 'videoCount', label: '投稿数', color: '#f59e0b' },
-		{ key: 'viewCount', label: '总播放数', color: '#8b5cf6' }
+		{ key: 'viewCount', label: '总播放数', color: '#8b5cf6' },
+		{ key: 'likeCount', label: '总获赞数', color: '#ec4899' }
 	] as const;
 
 	let chartData: { time: string; value: number }[] = [];
@@ -437,6 +438,9 @@
 						</Badge>
 						<Badge variant="secondary">赞 {statCount(detail.stat, 'like')}</Badge>
 						<Badge variant="secondary">转 {statCount(detail.stat, 'forward')}</Badge>
+						{#if detail.location}
+							<Badge variant="secondary">📍 {detail.location}</Badge>
+						{/if}
 						<span class="text-muted-foreground font-mono text-xs">{detail.id}</span>
 					</div>
 					<!-- 正文 -->

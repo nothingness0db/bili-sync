@@ -14,6 +14,7 @@ pub struct UpperProfile {
     pub follow_count: i64,
     pub video_count: i64,
     pub view_count: i64,
+    pub like_count: i64,
 }
 
 pub struct UpperInfo<'a> {
@@ -31,7 +32,7 @@ impl<'a> UpperInfo<'a> {
         }
     }
 
-    /// 获取 UP 主账号信息：名字、签名、头像、粉丝数、关注数、投稿数、总播放数
+    /// 获取 UP 主账号信息：名字、签名、头像、粉丝数、关注数、投稿数、总播放数、总获赞数
     pub async fn get_profile(&self) -> Result<UpperProfile> {
         let (card, upstat, arc_search) = tokio::try_join!(
             self.get_card(),
@@ -47,6 +48,7 @@ impl<'a> UpperInfo<'a> {
             follow_count: card["attention"].as_i64().unwrap_or(0),
             video_count: arc_search["data"]["page"]["count"].as_i64().unwrap_or(0),
             view_count: upstat["data"]["archive"]["view"].as_i64().unwrap_or(0),
+            like_count: upstat["data"]["likes"].as_i64().unwrap_or(0),
         })
     }
 

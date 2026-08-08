@@ -119,6 +119,8 @@ pub struct DynamicInfo {
     pub comment_type: i64,
     /// 评论对象 id（basic.rid_str），用于评论接口
     pub comment_oid: String,
+    /// 发布 IP 属地（如"江苏"），可为空
+    pub location: String,
     /// 原始接口 JSON
     pub raw: Value,
 }
@@ -229,6 +231,10 @@ async fn parse_dynamic_info(item: &Value) -> Result<Option<DynamicInfo>> {
     let basic = &item["basic"];
     let comment_type = basic["comment_type"].as_i64().unwrap_or(-1);
     let comment_oid = basic["rid_str"].as_str().unwrap_or("").to_string();
+    let location = item["modules"]["module_author"]["pub_location_text"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
     Ok(Some(DynamicInfo {
         id,
         dyn_type,
@@ -238,6 +244,7 @@ async fn parse_dynamic_info(item: &Value) -> Result<Option<DynamicInfo>> {
         pub_ts: pub_dt,
         comment_type,
         comment_oid,
+        location,
         raw: item.clone(),
     }))
 }

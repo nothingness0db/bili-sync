@@ -57,6 +57,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(Dynamic::CommentType).integer().default(-1).not_null())
                     .col(ColumnDef::new(Dynamic::CommentOid).string().default("").not_null())
+                    .col(ColumnDef::new(Dynamic::Location).string().default("").not_null())
                     .col(ColumnDef::new(Dynamic::Raw).text().null())
                     .col(ColumnDef::new(Dynamic::DownloadStatus).unsigned().default(0).not_null())
                     .col(ColumnDef::new(Dynamic::Path).string().default("").not_null())
@@ -142,6 +143,7 @@ enum Dynamic {
     PubTs,
     CommentType,
     CommentOid,
+    Location,
     Raw,
     DownloadStatus,
     Path,
