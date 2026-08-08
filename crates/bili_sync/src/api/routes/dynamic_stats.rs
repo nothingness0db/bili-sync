@@ -1,5 +1,8 @@
 use anyhow::Result;
-use axum::extract::{Extension, Path};
+use axum::body::Body;
+use axum::extract::{Extension, Path, Query};
+use axum::http::{StatusCode, header};
+use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
 use bili_sync_entity::*;
@@ -7,6 +10,8 @@ use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::QueryOrder;
 use sea_orm::{DatabaseConnection, QueryFilter};
+use serde::Deserialize;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::api::error::InnerApiError;
@@ -27,11 +32,63 @@ pub(super) fn router() -> Router {
             "/dynamic-sources/{id}/dynamics/{dyn_id}/detail",
             get(get_dynamic_detail),
         )
+        .route(
+            "/dynamic-sources/{id}/dynamics/{dyn_id}/file",
+            get(get_dynamic_file),
+        )
         .route("/dynamic-sources/{id}/rescan-replies", post(rescan_all_replies))
         .route(
             "/dynamic-sources/{id}/dynamics/{dyn_id}/rescan-reply",
             post(rescan_single_reply),
         )
+}
+
+#[derive(Deserialize)]
+pub struct DynamicFileRequest {
+    /// 相对动态目录的路径，如 "pics/01.jpg" 或 "comments/309397270945_1.jpg"
+    pub name: String,
+}
+
+/// 返回动态目录下的文件（仅允许 pics/ 与 comments/ 下的图片）
+pub async fn get_dynamic_file(
+    Path((id, dyn_id)): Path<(i32, String)>,
+    Query(params): Query<DynamicFileRequest>,
+    Extension(db): Extension<DatabaseConnection>,
+) -> Result<Response, ApiError> {
+    let Some(source) = dynamic_source::Entity::find_by_id(id).one(&db).await? else {
+        return Err(InnerApiError::NotFound(id).into());
+    };
+    let Some(dyn_model) = dynamic::Entity::find_by_id(&dyn_id).one(&db).await? else {
+        return Err(InnerApiError::NotFound(id).into());
+    };
+    if dyn_model.source_id != source.id {
+        return Err(InnerApiError::BadRequest("dynamic does not belong to this source".to_string()).into());
+    }
+    let name = params.name;
+    // 只允许 pics/ 与 comments/ 前缀，禁止路径穿越
+    if !(name.starts_with("pics/") || name.starts_with("comments/")) || name.contains("..") {
+        return Err(InnerApiError::BadRequest("invalid file name".to_string()).into());
+    }
+    let file_path = PathBuf::from(&dyn_model.path).join(&name);
+    match tokio::fs::read(&file_path).await {
+        Ok(bytes) => {
+            let mime = match file_path.extension().and_then(|e| e.to_str()) {
+                Some("jpg" | "jpeg") => "image/jpeg",
+                Some("png") => "image/png",
+                Some("gif") => "image/gif",
+                Some("webp") => "image/webp",
+                Some("json") => "application/json",
+                Some("md") => "text/markdown; charset=utf-8",
+                _ => "application/octet-stream",
+            };
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime)
+                .body(Body::from(bytes))
+                .expect("failed to build response"))
+        }
+        Err(_) => Err(InnerApiError::NotFound(id).into()),
+    }
 }
 
 /// 立即扫描一次该动态源的账号信息（名字/签名/头像/粉丝/关注/投稿/播放）

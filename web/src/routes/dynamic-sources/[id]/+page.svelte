@@ -447,6 +447,21 @@
 					{:else}
 						<div class="text-muted-foreground text-sm">（该动态无正文文本）</div>
 					{/if}
+					<!-- 图片 -->
+					{#if detail.pics.length > 0}
+						<div>
+							<div class="mb-2 text-sm font-medium">图片（{detail.pics.length}）</div>
+							<div class="flex flex-wrap gap-3">
+								{#each detail.pics as pic, i (i)}
+									<img
+										src={`/api/dynamic-sources/${sourceId}/dynamics/${detail.id}/file?name=pics/${String(i + 1).padStart(2, '0')}.jpg`}
+										alt={`图片 ${i + 1}`}
+										class="max-h-64 max-w-full rounded-lg border object-contain"
+									/>
+								{/each}
+							</div>
+						</div>
+					{/if}
 					<!-- 本地文件路径 -->
 					{#if detail.path}
 						<div class="text-muted-foreground font-mono text-xs">
@@ -495,6 +510,17 @@
 				{/if}
 			</div>
 			<div class="text-muted-foreground mt-1 text-sm break-words">{reply.content || '（无内容）'}</div>
+			{#if reply.images.length > 0}
+				<div class="mt-1 flex flex-wrap gap-2">
+					{#each reply.images as img, i (i)}
+						<img
+							src={`/api/dynamic-sources/${sourceId}/dynamics/${detail!.id}/file?name=comments/${reply.rpid}_${i + 1}.jpg`}
+							alt="评论图片"
+							class="h-24 max-w-48 rounded-md border object-cover"
+						/>
+					{/each}
+				</div>
+			{/if}
 			{#if reply.subReplies.length > 0}
 				<div class="mt-2 space-y-3">
 					{#each reply.subReplies as sub (sub.rpid)}
