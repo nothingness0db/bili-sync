@@ -304,19 +304,19 @@ fn render_module_dynamic(modules: &Value, dyn_type: &str) -> String {
         _ => {}
     }
     // 转发动态：附加转发源的内容
-    if dyn_type == "DYNAMIC_TYPE_FORWARD" {
-        if let Some(origin) = modules["origin"].as_object()
-            && let Some(origin_type) = origin["type"].as_str()
-            && origin_type.starts_with("DYNAMIC_TYPE_")
-        {
-            let upper_name = origin["modules"]["module_author"]["name"]
-                .as_str()
-                .unwrap_or("未知用户");
-            let origin_content = render_module_dynamic(&origin["modules"]["module_dynamic"], origin_type);
-            let jump = origin["id_str"]
-                .as_str()
-                .map(|id| format!("\n原动态链接: https://www.bilibili.com/opus/{id}"))
-                .unwrap_or_default();
+    if dyn_type == "DYNAMIC_TYPE_FORWARD"
+        && let Some(origin) = modules["origin"].as_object()
+        && let Some(origin_type) = origin["type"].as_str()
+        && origin_type.starts_with("DYNAMIC_TYPE_")
+    {
+        let upper_name = origin["modules"]["module_author"]["name"]
+            .as_str()
+            .unwrap_or("未知用户");
+        let origin_content = render_module_dynamic(&origin["modules"]["module_dynamic"], origin_type);
+        let jump = origin["id_str"]
+            .as_str()
+            .map(|id| format!("\n原动态链接: https://www.bilibili.com/opus/{id}"))
+            .unwrap_or_default();
             parts.push(format!("---- 转发自 @{upper_name} ----\n{origin_content}{jump}"));
         }
     }
@@ -356,9 +356,7 @@ fn extract_pics(modules: &Value) -> Vec<String> {
 }
 
 fn normalize_url(url: &str) -> String {
-    if url.starts_with("http://") {
-        format!("https://{}", &url[7..])
-    } else {
-        url.to_string()
-    }
+    url.strip_prefix("http://")
+        .map(|rest| format!("https://{rest}"))
+        .unwrap_or_else(|| url.to_string())
 }

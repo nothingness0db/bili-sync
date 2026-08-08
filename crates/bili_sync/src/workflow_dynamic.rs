@@ -341,6 +341,7 @@ async fn process_dynamic(
 }
 
 /// 拉取动态的评论：存库、导出 JSON/Markdown、下载评论图片
+#[allow(clippy::too_many_arguments)]
 async fn sync_dynamic_replies(
     dynamic_id: &str,
     comment_type: i64,

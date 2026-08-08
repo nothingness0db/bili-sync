@@ -148,7 +148,7 @@
 		}
 	}
 
-	function openRemoveDialog(source: DynamicSourceDetail, idx: number) {
+	function openRemoveDialog(source: DynamicSourceDetail) {
 		removeSource = source;
 		showRemoveDialog = true;
 	}
@@ -296,7 +296,7 @@
 											<Button
 												size="sm"
 												variant="outline"
-												onclick={() => openRemoveDialog(source, index)}
+												onclick={() => openRemoveDialog(source)}
 												class="h-8 w-8 p-0"
 											>
 												<Trash2Icon class="h-3 w-3" />

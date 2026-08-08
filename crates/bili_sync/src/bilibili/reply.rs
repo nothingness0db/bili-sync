@@ -187,9 +187,7 @@ impl<'a> Reply<'a> {
 }
 
 fn normalize_url(url: &str) -> String {
-    if url.starts_with("http://") {
-        format!("https://{}", &url[7..])
-    } else {
-        url.to_string()
-    }
+    url.strip_prefix("http://")
+        .map(|rest| format!("https://{rest}"))
+        .unwrap_or_else(|| url.to_string())
 }

@@ -6,7 +6,6 @@
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import * as Chart from '$lib/components/ui/chart/index.js';
 	import MyChartTooltip from '$lib/components/custom/my-chart-tooltip.svelte';
 	import { AreaChart } from 'layerchart';
@@ -18,6 +17,7 @@
 	import EyeIcon from '@lucide/svelte/icons/eye';
 	import UserIcon from '@lucide/svelte/icons/user';
 	import { toast } from 'svelte-sonner';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { setBreadcrumb } from '$lib/stores/breadcrumb';
 	import type {
 		ApiError,
@@ -35,7 +35,7 @@
 	let loading = false;
 	let rescanningAll = false;
 	let scanningProfile = false;
-	let rescanningIds = new Set<string>();
+	let rescanningIds = new SvelteSet<string>();
 
 	// 动态详情对话框
 	let showDetailDialog = false;
@@ -73,8 +73,6 @@
 		{ key: 'viewCount', label: '总播放数', color: '#8b5cf6' },
 		{ key: 'likeCount', label: '总获赞数', color: '#ec4899' }
 	] as const;
-
-	let chartData: { time: string; value: number }[] = [];
 
 	function buildChartData(points: StatPoint[], key: (typeof METRICS)[number]['key']) {
 		return points.map((p) => ({
@@ -220,7 +218,7 @@
 
 		<!-- 数据折线图 -->
 		<div class="grid gap-6 lg:grid-cols-2">
-			{#each METRICS as metric}
+			{#each METRICS as metric (metric.key)}
 				<div class="rounded-lg border p-4">
 					<div class="mb-3 flex items-center justify-between">
 						<span class="text-sm font-medium">{metric.label}</span>
@@ -468,7 +466,7 @@
 						<div>
 							<div class="mb-2 text-sm font-medium">图片（{detail.pics.length}）</div>
 							<div class="flex flex-wrap gap-3">
-								{#each detail.pics as pic, i (i)}
+								{#each detail.pics as _, i (i)}
 									<img
 										src={`/api/dynamic-sources/${sourceId}/dynamics/${detail.id}/file?name=pics/${String(i + 1).padStart(2, '0')}.jpg`}
 										alt={`图片 ${i + 1}`}
@@ -530,7 +528,7 @@
 			</div>
 			{#if reply.images.length > 0}
 				<div class="mt-1 flex flex-wrap gap-2">
-					{#each reply.images as img, i (i)}
+					{#each reply.images as _, i (i)}
 						<img
 							src={`/api/dynamic-sources/${sourceId}/dynamics/${detail!.id}/file?name=comments/${reply.rpid}_${i + 1}.jpg`}
 							alt="评论图片"

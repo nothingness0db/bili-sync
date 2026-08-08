@@ -235,11 +235,11 @@ pub async fn get_enabled_video_sources(connection: &DatabaseConnection) -> Resul
 
 /// 获取所有已经启用的动态源
 pub async fn get_enabled_dynamic_sources(connection: &DatabaseConnection) -> Result<Vec<dynamic_source::Model>> {
-    Ok(dynamic_source::Entity::find()
+    dynamic_source::Entity::find()
         .filter(dynamic_source::Column::Enabled.eq(true))
         .all(connection)
         .await
-        .context("get enabled dynamic sources failed")?)
+        .context("get enabled dynamic sources failed")
 }
 
 /// 从数据库中加载配置
