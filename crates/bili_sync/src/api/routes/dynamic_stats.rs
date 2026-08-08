@@ -11,7 +11,7 @@ use axum::routing::{get, post};
 use bili_sync_entity::*;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{DatabaseConnection, QueryFilter, QueryOrder};
+use sea_orm::{DatabaseConnection, QueryFilter, QueryOrder, QuerySelect, QueryTrait};
 use serde::Deserialize;
 
 use crate::api::error::InnerApiError;
@@ -166,13 +166,35 @@ pub async fn get_dynamic_source_dynamics(
         .order_by_desc(dynamic::Column::PubTs)
         .all(&db)
         .await?;
+    // 一次聚合查询拿到所有动态的本地评论数，避免 N+1
+    #[derive(sea_orm::FromQueryResult)]
+    struct ReplyCountRow {
+        dynamic_id: String,
+        cnt: i64,
+    }
+    let reply_counts: std::collections::HashMap<String, i64> = reply::Entity::find()
+        .filter(
+            reply::Column::DynamicId.in_subquery(
+                dynamic::Entity::find()
+                    .filter(dynamic::Column::SourceId.eq(source.id))
+                    .select_only()
+                    .column(dynamic::Column::Id)
+                    .as_query()
+                    .to_owned(),
+            ),
+        )
+        .select_only()
+        .column(reply::Column::DynamicId)
+        .column_as(reply::Column::Rpid.count(), "cnt")
+        .group_by(reply::Column::DynamicId)
+        .into_model::<ReplyCountRow>()
+        .all(&db)
+        .await?
+        .into_iter()
+        .map(|row| (row.dynamic_id, row.cnt))
+        .collect();
     let mut items = Vec::with_capacity(dynamics.len());
     for d in dynamics {
-        let reply_count = reply::Entity::find()
-            .filter(reply::Column::DynamicId.eq(&d.id))
-            .count(&db)
-            .await
-            .unwrap_or(0) as i64;
         items.push(DynamicListItem {
             id: d.id.clone(),
             dyn_type: d.dyn_type.clone(),
@@ -183,7 +205,7 @@ pub async fn get_dynamic_source_dynamics(
                 .as_ref()
                 .and_then(|s| s["comment"]["count"].as_i64())
                 .unwrap_or(0),
-            reply_count,
+            reply_count: reply_counts.get(&d.id).copied().unwrap_or(0),
             rescan_reply: d.rescan_reply,
             path: d.path,
         });

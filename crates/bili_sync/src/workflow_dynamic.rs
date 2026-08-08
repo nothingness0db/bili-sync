@@ -91,8 +91,9 @@ async fn backfill_missing_replies(source: &dynamic_source::Model, connection: &D
         let local_count = reply::Entity::find()
             .filter(reply::Column::DynamicId.eq(&dyn_model.id))
             .count(connection)
-            .await?;
-        if local_count > 0 {
+            .await? as i64;
+        // 本地评论少于 API 评论数（含部分同步）时补拉
+        if local_count >= api_count {
             continue;
         }
         let mut model: dynamic::ActiveModel = dyn_model.into();
