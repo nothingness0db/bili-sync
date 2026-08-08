@@ -52,18 +52,15 @@ fn render_comment(reply: &ReplyInfo, depth: usize, index: usize) -> String {
     let mut out = String::new();
     let time = reply.ctime.format("%Y-%m-%d %H:%M:%S");
     if depth == 0 {
-        out.push_str(&format!(
-            "{indent}### 评论 {index}  @{}（{}）\n\n",
-            reply.uname, time
-        ));
+        out.push_str(&format!("{indent}### 评论 {index}  @{}（{}）\n\n", reply.uname, time));
     } else {
-        out.push_str(&format!(
-            "{indent}- 回复 @{}（{}）\n",
-            reply.uname, time
-        ));
+        out.push_str(&format!("{indent}- 回复 @{}（{}）\n", reply.uname, time));
     }
     if !reply.content.is_empty() {
-        out.push_str(&format!("{indent}{}\n\n", reply.content.replace('\n', &format!("\n{indent}"))));
+        out.push_str(&format!(
+            "{indent}{}\n\n",
+            reply.content.replace('\n', &format!("\n{indent}"))
+        ));
     }
     if !reply.images.is_empty() {
         for (i, _) in reply.images.iter().enumerate() {

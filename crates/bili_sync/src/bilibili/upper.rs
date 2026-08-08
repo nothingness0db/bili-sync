@@ -34,11 +34,7 @@ impl<'a> UpperInfo<'a> {
 
     /// 获取 UP 主账号信息：名字、签名、头像、粉丝数、关注数、投稿数、总播放数、总获赞数
     pub async fn get_profile(&self) -> Result<UpperProfile> {
-        let (card, upstat, arc_search) = tokio::try_join!(
-            self.get_card(),
-            self.get_upstat(),
-            self.get_arc_search()
-        )?;
+        let (card, upstat, arc_search) = tokio::try_join!(self.get_card(), self.get_upstat(), self.get_arc_search())?;
         let card = card["data"]["card"].clone();
         Ok(UpperProfile {
             name: card["name"].as_str().unwrap_or_default().to_string(),
@@ -73,11 +69,7 @@ impl<'a> UpperInfo<'a> {
     /// 总播放数（无需 wbi 签名）
     async fn get_upstat(&self) -> Result<Value> {
         self.client
-            .request(
-                Method::GET,
-                "https://api.bilibili.com/x/space/upstat",
-                self.credential,
-            )
+            .request(Method::GET, "https://api.bilibili.com/x/space/upstat", self.credential)
             .await
             .query(&[("mid", self.upper_id.as_str())])
             .send()

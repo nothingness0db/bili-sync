@@ -65,7 +65,8 @@
 
 	// 从空间页 URL 中解析 mid，支持粘贴整条链接
 	function handleUpperInput(value: string) {
-		const urlMatch = value.match(/space\.bilibili\.com\/(\d+)/) || value.match(/bilibili\.com\/opus\/(\d+)/);
+		const urlMatch =
+			value.match(/space\.bilibili\.com\/(\d+)/) || value.match(/bilibili\.com\/opus\/(\d+)/);
 		if (urlMatch) {
 			// opus 链接里的数字是动态 id 不是 mid，仅 space 链接可用
 			if (value.includes('space.bilibili.com')) {
@@ -238,16 +239,12 @@
 								</Table.Cell>
 								<Table.Cell>
 									{#if source.syncReply}
-										<Badge
-											class="flex w-fit items-center gap-1.5 bg-emerald-700 text-emerald-100"
-										>
+										<Badge class="flex w-fit items-center gap-1.5 bg-emerald-700 text-emerald-100">
 											<MessagesSquareIcon class="h-3 w-3" />
 											开启
 										</Badge>
 									{:else}
-										<Badge variant="secondary" class="flex w-fit items-center gap-1.5">
-											关闭
-										</Badge>
+										<Badge variant="secondary" class="flex w-fit items-center gap-1.5">关闭</Badge>
 									{/if}
 								</Table.Cell>
 								<Table.Cell>
@@ -319,9 +316,7 @@
 			<div class="flex flex-col items-center justify-center py-12">
 				<MessagesSquareIcon class="text-muted-foreground mb-4 h-12 w-12" />
 				<div class="text-muted-foreground mb-2 text-lg font-medium">暂无动态源</div>
-				<p class="text-muted-foreground mb-4 text-center text-sm">
-					还没有添加任何 UP 主动态订阅
-				</p>
+				<p class="text-muted-foreground mb-4 text-center text-sm">还没有添加任何 UP 主动态订阅</p>
 				<Button onclick={openAddDialog} class="flex items-center gap-2">
 					<PlusIcon class="h-4 w-4" />
 					添加动态源
@@ -364,11 +359,17 @@
 					<Label class="text-sm font-medium">同步该 UP 主动态下的评论</Label>
 				</div>
 				<p class="text-muted-foreground text-xs">
-					动态同步包含正文、图片、点赞/评论/转发数、原始 JSON；开启评论后还会拉取全部评论及楼中楼回复。
+					动态同步包含正文、图片、点赞/评论/转发数、原始
+					JSON；开启评论后还会拉取全部评论及楼中楼回复。
 				</p>
 			</div>
 			<div class="mt-6 flex justify-end gap-2">
-				<Button variant="outline" onclick={() => (showAddDialog = false)} disabled={adding} class="px-4">
+				<Button
+					variant="outline"
+					onclick={() => (showAddDialog = false)}
+					disabled={adding}
+					class="px-4"
+				>
 					取消
 				</Button>
 				<Button onclick={handleAdd} disabled={adding} class="px-4">
@@ -381,7 +382,9 @@
 	<!-- 编辑对话框 -->
 	<Dialog.Root bind:open={showEditDialog}>
 		<Dialog.Content>
-			<Dialog.Title class="text-lg font-semibold">编辑动态源: {editingSource?.upperName || ''}</Dialog.Title>
+			<Dialog.Title class="text-lg font-semibold"
+				>编辑动态源: {editingSource?.upperName || ''}</Dialog.Title
+			>
 			<div class="mt-6 space-y-6">
 				<div>
 					<Label for="edit-path" class="text-sm font-medium">保存路径</Label>

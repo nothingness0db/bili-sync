@@ -1,18 +1,18 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use anyhow::Result;
+use axum::Router;
 use axum::body::Body;
 use axum::extract::{Extension, Path, Query};
 use axum::http::{StatusCode, header};
 use axum::response::Response;
 use axum::routing::{get, post};
-use axum::Router;
 use bili_sync_entity::*;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::QueryOrder;
-use sea_orm::{DatabaseConnection, QueryFilter};
+use sea_orm::{DatabaseConnection, QueryFilter, QueryOrder};
 use serde::Deserialize;
-use std::path::PathBuf;
-use std::sync::Arc;
 
 use crate::api::error::InnerApiError;
 use crate::api::response::{
@@ -32,10 +32,7 @@ pub(super) fn router() -> Router {
             "/dynamic-sources/{id}/dynamics/{dyn_id}/detail",
             get(get_dynamic_detail),
         )
-        .route(
-            "/dynamic-sources/{id}/dynamics/{dyn_id}/file",
-            get(get_dynamic_file),
-        )
+        .route("/dynamic-sources/{id}/dynamics/{dyn_id}/file", get(get_dynamic_file))
         .route("/dynamic-sources/{id}/rescan-replies", post(rescan_all_replies))
         .route(
             "/dynamic-sources/{id}/dynamics/{dyn_id}/rescan-reply",
@@ -175,7 +172,11 @@ pub async fn get_dynamic_source_dynamics(
             dyn_type: d.dyn_type.clone(),
             content: d.content.chars().take(100).collect(),
             pub_ts: d.pub_ts,
-            comment_count: d.stat.as_ref().and_then(|s| s["comment"]["count"].as_i64()).unwrap_or(0),
+            comment_count: d
+                .stat
+                .as_ref()
+                .and_then(|s| s["comment"]["count"].as_i64())
+                .unwrap_or(0),
             rescan_reply: d.rescan_reply,
             path: d.path,
         })

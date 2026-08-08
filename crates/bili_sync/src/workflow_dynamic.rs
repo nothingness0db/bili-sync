@@ -1,10 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
-use bili_sync_entity::dynamic;
-use bili_sync_entity::dynamic_source;
-use bili_sync_entity::reply;
-use bili_sync_entity::upper_stat;
+use bili_sync_entity::{dynamic, dynamic_source, reply, upper_stat};
 use futures::StreamExt;
 use sea_orm::ActiveValue::Set;
 use sea_orm::QueryOrder;
@@ -13,7 +10,7 @@ use sea_orm::sea_query::OnConflict;
 use serde_json::Value;
 use tokio::fs;
 
-use crate::bilibili::{BiliClient, BiliError, DynamicFeed, DynamicInfo, Reply, ReplyInfo, UpperInfo, MIXIN_KEY};
+use crate::bilibili::{BiliClient, BiliError, DynamicFeed, DynamicInfo, MIXIN_KEY, Reply, ReplyInfo, UpperInfo};
 use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::utils::dynamic_render::{render_comments_md, render_dynamic_md};
@@ -275,11 +272,7 @@ async fn process_dynamic(
     config: &Config,
 ) -> Result<()> {
     // 目录格式 {path}/{YYYY-MM-DD} {dyn_id}
-    let dir = PathBuf::from(&source.path).join(format!(
-        "{} {}",
-        dyn_model.pub_ts.format("%Y-%m-%d"),
-        dyn_model.id
-    ));
+    let dir = PathBuf::from(&source.path).join(format!("{} {}", dyn_model.pub_ts.format("%Y-%m-%d"), dyn_model.id));
     fs::create_dir_all(&dir).await?;
     // 原始 JSON
     if let Some(raw) = &dyn_model.raw {
@@ -307,11 +300,16 @@ async fn process_dynamic(
     let pics_dir = dir.join("pics");
     for (i, url) in info.pics.iter().enumerate() {
         downloader
-            .fetch(url, &pics_dir.join(format!("{:0>2}.jpg", i + 1)), &config.concurrent_limit.download)
+            .fetch(
+                url,
+                &pics_dir.join(format!("{:0>2}.jpg", i + 1)),
+                &config.concurrent_limit.download,
+            )
             .await?;
     }
     // 同步评论：发布 5 天内的动态每轮自动同步，5 天外的仅在被手动标记重扫时同步
-    let within_window = dyn_model.pub_ts.and_utc() + chrono::Duration::days(REPLY_SYNC_WINDOW_DAYS) >= chrono::Utc::now();
+    let within_window =
+        dyn_model.pub_ts.and_utc() + chrono::Duration::days(REPLY_SYNC_WINDOW_DAYS) >= chrono::Utc::now();
     let need_rescan = dyn_model.rescan_reply;
     if source.sync_reply && (within_window || need_rescan) {
         sync_dynamic_replies(
@@ -365,19 +363,31 @@ async fn sync_dynamic_replies(
     save_replies(dynamic_id, &replies, connection).await?;
     // 导出 JSON / Markdown
     fs::create_dir_all(comments_dir).await?;
-    fs::write(comments_dir.join("comments.json"), serde_json::to_string_pretty(&replies)?).await?;
+    fs::write(
+        comments_dir.join("comments.json"),
+        serde_json::to_string_pretty(&replies)?,
+    )
+    .await?;
     fs::write(comments_dir.join("comments.md"), render_comments_md(&replies)).await?;
     // 下载评论图片
     for reply in &replies {
         for (i, url) in reply.images.iter().enumerate() {
             downloader
-                .fetch(url, &comments_dir.join(format!("{}_{}.jpg", reply.rpid, i + 1)), &config.concurrent_limit.download)
+                .fetch(
+                    url,
+                    &comments_dir.join(format!("{}_{}.jpg", reply.rpid, i + 1)),
+                    &config.concurrent_limit.download,
+                )
                 .await?;
         }
         for sub in &reply.sub_replies {
             for (i, url) in sub.images.iter().enumerate() {
                 downloader
-                    .fetch(url, &comments_dir.join(format!("{}_{}.jpg", sub.rpid, i + 1)), &config.concurrent_limit.download)
+                    .fetch(
+                        url,
+                        &comments_dir.join(format!("{}_{}.jpg", sub.rpid, i + 1)),
+                        &config.concurrent_limit.download,
+                    )
                     .await?;
             }
         }

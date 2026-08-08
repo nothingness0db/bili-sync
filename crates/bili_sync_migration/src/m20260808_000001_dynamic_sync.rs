@@ -18,7 +18,12 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(DynamicSource::UpperId).unique_key().unsigned().not_null())
+                    .col(
+                        ColumnDef::new(DynamicSource::UpperId)
+                            .unique_key()
+                            .unsigned()
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(DynamicSource::UpperName).string().not_null())
                     .col(ColumnDef::new(DynamicSource::Path).string().not_null())
                     .col(
@@ -33,8 +38,18 @@ impl MigrationTrait for Migration {
                             .default(Expr::current_timestamp())
                             .not_null(),
                     )
-                    .col(ColumnDef::new(DynamicSource::SyncReply).boolean().default(false).not_null())
-                    .col(ColumnDef::new(DynamicSource::Enabled).boolean().default(false).not_null())
+                    .col(
+                        ColumnDef::new(DynamicSource::SyncReply)
+                            .boolean()
+                            .default(false)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(DynamicSource::Enabled)
+                            .boolean()
+                            .default(false)
+                            .not_null(),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -106,9 +121,7 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .drop_table(Table::drop().table(Reply::Table).to_owned())
-            .await?;
+        manager.drop_table(Table::drop().table(Reply::Table).to_owned()).await?;
         manager
             .drop_table(Table::drop().table(Dynamic::Table).to_owned())
             .await?;

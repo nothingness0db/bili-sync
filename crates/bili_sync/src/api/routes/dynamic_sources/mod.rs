@@ -1,7 +1,7 @@
 use anyhow::Result;
+use axum::Router;
 use axum::extract::{Extension, Path};
 use axum::routing::{get, put};
-use axum::Router;
 use bili_sync_entity::*;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
@@ -18,7 +18,10 @@ pub(super) fn router() -> Router {
     Router::new()
         .route("/dynamic-sources", get(get_dynamic_sources).post(insert_dynamic_source))
         .route("/dynamic-sources/details", get(get_dynamic_sources_details))
-        .route("/dynamic-sources/{id}", put(update_dynamic_source).delete(remove_dynamic_source))
+        .route(
+            "/dynamic-sources/{id}",
+            put(update_dynamic_source).delete(remove_dynamic_source),
+        )
 }
 
 /// 列出所有动态源

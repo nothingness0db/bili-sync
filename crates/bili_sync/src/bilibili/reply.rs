@@ -93,7 +93,9 @@ impl<'a> Reply<'a> {
             // 下一页游标
             match data["cursor"]["pagination_reply"]["next_offset"] {
                 Value::Null => break,
-                ref offset if offset.is_null() || offset.is_string() && offset.as_str().unwrap_or("").is_empty() => break,
+                ref offset if offset.is_null() || offset.is_string() && offset.as_str().unwrap_or("").is_empty() => {
+                    break;
+                }
                 ref offset => next_offset = Some(offset.clone()),
             }
         }
@@ -103,9 +105,10 @@ impl<'a> Reply<'a> {
     /// 解析单条评论
     fn parse_reply(&self, reply: &Value) -> Result<ReplyInfo> {
         let rpid = reply["rpid"].as_i64().context("invalid rpid")?;
-        let parent_rpid = reply["parent"].as_i64().filter(|r| *r != 0).or_else(|| {
-            reply["replied_comment"]["rpid"].as_i64().filter(|r| *r != 0)
-        });
+        let parent_rpid = reply["parent"]
+            .as_i64()
+            .filter(|r| *r != 0)
+            .or_else(|| reply["replied_comment"]["rpid"].as_i64().filter(|r| *r != 0));
         let member = &reply["member"];
         let uname = member["uname"].as_str().unwrap_or("未知用户").to_string();
         let avatar = member["avatar"].as_str().unwrap_or_default().to_string();

@@ -309,13 +309,22 @@ fn render_module_dynamic(modules: &Value, dyn_type: &str) -> String {
             && let Some(origin_type) = origin["type"].as_str()
             && origin_type.starts_with("DYNAMIC_TYPE_")
         {
-            let upper_name = origin["modules"]["module_author"]["name"].as_str().unwrap_or("未知用户");
+            let upper_name = origin["modules"]["module_author"]["name"]
+                .as_str()
+                .unwrap_or("未知用户");
             let origin_content = render_module_dynamic(&origin["modules"]["module_dynamic"], origin_type);
-            let jump = origin["id_str"].as_str().map(|id| format!("\n原动态链接: https://www.bilibili.com/opus/{id}")).unwrap_or_default();
+            let jump = origin["id_str"]
+                .as_str()
+                .map(|id| format!("\n原动态链接: https://www.bilibili.com/opus/{id}"))
+                .unwrap_or_default();
             parts.push(format!("---- 转发自 @{upper_name} ----\n{origin_content}{jump}"));
         }
     }
-    parts.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n")
+    parts
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// 提取动态正文中的图片 URL（原图），http 统一替换为 https

@@ -133,7 +133,8 @@
 		}
 	}
 
-	async function rescanAll() {		rescanningAll = true;
+	async function rescanAll() {
+		rescanningAll = true;
 		try {
 			const response = await api.rescanAllReplies(sourceId);
 			toast.success('已标记重扫', {
@@ -230,7 +231,10 @@
 						{/if}
 					</div>
 					{#if stats.stats.length > 1}
-						<Chart.Container config={chartConfig(metric.label, metric.color)} class="h-[150px] w-full">
+						<Chart.Container
+							config={chartConfig(metric.label, metric.color)}
+							class="h-[150px] w-full"
+						>
 							<AreaChart
 								data={buildChartData(stats.stats, metric.key)}
 								x="time"
@@ -307,7 +311,13 @@
 					<MessagesSquareIcon class="h-4 w-4" />
 					<span class="text-sm font-medium">动态列表（评论自动同步发布后 5 天）</span>
 				</div>
-				<Button size="sm" variant="outline" onclick={rescanAll} disabled={rescanningAll} class="flex items-center gap-2">
+				<Button
+					size="sm"
+					variant="outline"
+					onclick={rescanAll}
+					disabled={rescanningAll}
+					class="flex items-center gap-2"
+				>
 					<RefreshCwIcon class="h-3.5 w-3.5" />
 					{rescanningAll ? '标记中...' : '全部重扫评论'}
 				</Button>
@@ -354,7 +364,9 @@
 												等待重扫
 											</Badge>
 										{:else if dyn.path}
-											<Badge class="flex w-fit items-center gap-1.5 bg-emerald-700 text-emerald-100">
+											<Badge
+												class="flex w-fit items-center gap-1.5 bg-emerald-700 text-emerald-100"
+											>
 												已同步
 											</Badge>
 										{:else}
@@ -414,10 +426,10 @@
 
 	<!-- 动态详情对话框：正文 + 评论树 -->
 	<Dialog.Root bind:open={showDetailDialog}>
-		<Dialog.Content class="no-scrollbar max-h-[85vh] max-w-[90vw]! overflow-y-auto lg:max-w-[60vw]!">
-			<Dialog.Title class="text-lg font-semibold">
-				动态详情
-			</Dialog.Title>
+		<Dialog.Content
+			class="no-scrollbar max-h-[85vh] max-w-[90vw]! overflow-y-auto lg:max-w-[60vw]!"
+		>
+			<Dialog.Title class="text-lg font-semibold">动态详情</Dialog.Title>
 			{#if detailLoading}
 				<div class="flex items-center justify-center py-12">
 					<div class="text-muted-foreground">加载中...</div>
@@ -445,7 +457,7 @@
 					</div>
 					<!-- 正文 -->
 					{#if detail.content}
-						<div class="bg-muted/50 whitespace-pre-wrap rounded-lg p-4 text-sm leading-relaxed">
+						<div class="bg-muted/50 rounded-lg p-4 text-sm leading-relaxed whitespace-pre-wrap">
 							{detail.content}
 						</div>
 					{:else}
@@ -513,7 +525,9 @@
 					<Badge variant="secondary" class="text-[10px]">楼中楼</Badge>
 				{/if}
 			</div>
-			<div class="text-muted-foreground mt-1 text-sm break-words">{reply.content || '（无内容）'}</div>
+			<div class="text-muted-foreground mt-1 text-sm break-words">
+				{reply.content || '（无内容）'}
+			</div>
 			{#if reply.images.length > 0}
 				<div class="mt-1 flex flex-wrap gap-2">
 					{#each reply.images as img, i (i)}

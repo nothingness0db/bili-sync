@@ -5,19 +5,19 @@ import type {
 	CollectionsResponse,
 	Config,
 	DashBoardResponse,
+	DynamicDetailResponse,
 	DynamicListItem,
 	DynamicSourceDetail,
 	DynamicStatsResponse,
-	DynamicDetailResponse,
 	FavoritesResponse,
 	FullSyncVideoSourceRequest,
 	FullSyncVideoSourceResponse,
-	InsertDynamicSourceRequest,
+	QrcodeGenerateResponse as GenerateQrcodeResponse,
 	InsertCollectionRequest,
+	InsertDynamicSourceRequest,
 	InsertFavoriteRequest,
 	InsertSubmissionRequest,
 	Notifier,
-	QrcodeGenerateResponse as GenerateQrcodeResponse,
 	QrcodePollResponse as PollQrcodeResponse,
 	ResetFilteredVideosResponse,
 	ResetFilteredVideoStatusRequest,
@@ -167,9 +167,7 @@ class ApiClient {
 		return this.get<DynamicSourceDetail[]>('/dynamic-sources/details');
 	}
 
-	async insertDynamicSource(
-		request: InsertDynamicSourceRequest
-	): Promise<ApiResponse<boolean>> {
+	async insertDynamicSource(request: InsertDynamicSourceRequest): Promise<ApiResponse<boolean>> {
 		return this.post<boolean>('/dynamic-sources', request);
 	}
 
@@ -364,7 +362,8 @@ export const apiClient = new ApiClient();
 const api = {
 	getVideoSources: () => apiClient.getVideoSources(),
 	getDynamicSources: () => apiClient.getDynamicSources(),
-	insertDynamicSource: (request: InsertDynamicSourceRequest) => apiClient.insertDynamicSource(request),
+	insertDynamicSource: (request: InsertDynamicSourceRequest) =>
+		apiClient.insertDynamicSource(request),
 	updateDynamicSource: (id: number, request: UpdateDynamicSourceRequest) =>
 		apiClient.updateDynamicSource(id, request),
 	removeDynamicSource: (id: number) => apiClient.removeDynamicSource(id),
