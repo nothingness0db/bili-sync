@@ -42,6 +42,10 @@ pub fn router() -> Router {
 
 /// 中间件：使用 auth token 对请求进行身份验证
 pub async fn auth(mut headers: HeaderMap, request: Request, next: Next) -> Result<Response, StatusCode> {
+    // 动态文件接口（仅 pics/ 与 comments/ 下受限路径的图片）供 <img> 标签直接访问，豁免 token 校验
+    if request.uri().path().ends_with("/file") {
+        return Ok(next.run(request).await);
+    }
     let config = VersionedConfig::get().read();
     let token = config.auth_token.as_str();
     if headers
