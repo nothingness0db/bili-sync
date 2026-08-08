@@ -21,7 +21,7 @@ use crate::api::response::{
 use crate::api::wrapper::{ApiError, ApiResponse};
 use crate::bilibili::BiliClient;
 use crate::config::VersionedConfig;
-use crate::workflow_dynamic::update_upper_stat;
+use crate::workflow_dynamic::{ensure_mixin_key, update_upper_stat};
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -101,6 +101,8 @@ pub async fn scan_profile(
         return Err(InnerApiError::NotFound(id).into());
     };
     let config = VersionedConfig::get().snapshot();
+    // 手动扫描路径不依赖定时任务，独立初始化 wbi 签名密钥
+    ensure_mixin_key(&bili_client, &config.credential).await?;
     update_upper_stat(&source, &bili_client, &db, &config).await?;
     Ok(ApiResponse::ok(true))
 }

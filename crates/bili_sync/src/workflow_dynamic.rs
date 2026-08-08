@@ -13,7 +13,7 @@ use sea_orm::sea_query::OnConflict;
 use serde_json::Value;
 use tokio::fs;
 
-use crate::bilibili::{BiliClient, BiliError, DynamicFeed, DynamicInfo, Reply, ReplyInfo, UpperInfo};
+use crate::bilibili::{BiliClient, BiliError, DynamicFeed, DynamicInfo, Reply, ReplyInfo, UpperInfo, MIXIN_KEY};
 use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::utils::dynamic_render::{render_comments_md, render_dynamic_md};
@@ -26,6 +26,20 @@ const MAX_SUB_REPLY_PAGES: usize = 10;
 /// 动态发布后自动同步评论的时间窗口（天）
 const REPLY_SYNC_WINDOW_DAYS: i64 = 5;
 
+/// 确保全局 wbi 签名密钥已初始化，未初始化时立即获取（依赖视频任务的全局状态不可靠）
+pub async fn ensure_mixin_key(bili_client: &BiliClient, credential: &crate::bilibili::Credential) -> Result<()> {
+    if MIXIN_KEY.load().is_none() {
+        let mixin_key = bili_client
+            .wbi_img(credential)
+            .await
+            .context("获取 wbi_img 失败")?
+            .into_mixin_key()
+            .context("解析 mixin key 失败")?;
+        crate::bilibili::set_global_mixin_key(mixin_key);
+    }
+    Ok(())
+}
+
 /// 完整地处理某个动态源：刷新动态列表、下载图片、同步评论并导出
 pub async fn process_dynamic_source(
     source: dynamic_source::Model,
@@ -33,6 +47,8 @@ pub async fn process_dynamic_source(
     connection: &DatabaseConnection,
     config: &Config,
 ) -> Result<()> {
+    // wbi 签名密钥不依赖视频任务的全局状态，动态同步独立初始化
+    ensure_mixin_key(bili_client, &config.credential).await?;
     fs::create_dir_all(&source.path)
         .await
         .with_context(|| format!("failed to create dynamic source directory {}", source.path))?;
