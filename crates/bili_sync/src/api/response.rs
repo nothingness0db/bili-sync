@@ -65,6 +65,33 @@ pub struct DynamicListItem {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DynamicDetailResponse {
+    pub id: String,
+    pub dyn_type: String,
+    pub content: String,
+    pub pics: Vec<String>,
+    pub stat: serde_json::Value,
+    pub pub_ts: DateTime,
+    pub path: String,
+    /// 顶级评论（含楼中楼）
+    pub replies: Vec<ReplyItem>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplyItem {
+    pub rpid: i64,
+    pub parent_rpid: Option<i64>,
+    pub uname: String,
+    pub avatar: String,
+    pub content: String,
+    pub images: Vec<String>,
+    pub ctime: DateTime,
+    pub sub_replies: Vec<ReplyItem>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DynamicSourceDetail {
     pub id: i32,
     pub upper_id: i64,

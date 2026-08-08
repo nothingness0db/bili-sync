@@ -10,7 +10,9 @@ use sea_orm::{DatabaseConnection, QueryFilter};
 use std::sync::Arc;
 
 use crate::api::error::InnerApiError;
-use crate::api::response::{DynamicListItem, DynamicStatsResponse, StatPoint, UpperVersion};
+use crate::api::response::{
+    DynamicDetailResponse, DynamicListItem, DynamicStatsResponse, ReplyItem, StatPoint, UpperVersion,
+};
 use crate::api::wrapper::{ApiError, ApiResponse};
 use crate::bilibili::BiliClient;
 use crate::config::VersionedConfig;
@@ -21,6 +23,10 @@ pub(super) fn router() -> Router {
         .route("/dynamic-sources/{id}/stats", get(get_dynamic_source_stats))
         .route("/dynamic-sources/{id}/scan-profile", post(scan_profile))
         .route("/dynamic-sources/{id}/dynamics", get(get_dynamic_source_dynamics))
+        .route(
+            "/dynamic-sources/{id}/dynamics/{dyn_id}/detail",
+            get(get_dynamic_detail),
+        )
         .route("/dynamic-sources/{id}/rescan-replies", post(rescan_all_replies))
         .route(
             "/dynamic-sources/{id}/dynamics/{dyn_id}/rescan-reply",
@@ -115,6 +121,80 @@ pub async fn get_dynamic_source_dynamics(
         })
         .collect();
     Ok(ApiResponse::ok(items))
+}
+
+/// 获取动态详情（正文全文 + 评论树）
+pub async fn get_dynamic_detail(
+    Path((id, dyn_id)): Path<(i32, String)>,
+    Extension(db): Extension<DatabaseConnection>,
+) -> Result<ApiResponse<DynamicDetailResponse>, ApiError> {
+    let Some(source) = dynamic_source::Entity::find_by_id(id).one(&db).await? else {
+        return Err(InnerApiError::NotFound(id).into());
+    };
+    let Some(dyn_model) = dynamic::Entity::find_by_id(&dyn_id).one(&db).await? else {
+        return Err(InnerApiError::NotFound(id).into());
+    };
+    if dyn_model.source_id != source.id {
+        return Err(InnerApiError::BadRequest("dynamic does not belong to this source".to_string()).into());
+    }
+    let pics: Vec<String> = dyn_model
+        .pics
+        .clone()
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+    let replies = reply::Entity::find()
+        .filter(reply::Column::DynamicId.eq(&dyn_id))
+        .filter(reply::Column::Valid.eq(true))
+        .order_by_asc(reply::Column::Ctime)
+        .all(&db)
+        .await?;
+    // 在内存中构建评论树
+    let mut reply_map = std::collections::HashMap::<i64, ReplyItem>::new();
+    for r in replies.iter() {
+        let images: Vec<String> = r
+            .images
+            .clone()
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+        reply_map.insert(
+            r.rpid,
+            ReplyItem {
+                rpid: r.rpid,
+                parent_rpid: r.parent_rpid,
+                uname: r.uname.clone(),
+                avatar: r.avatar.clone(),
+                content: r.content.clone(),
+                images,
+                ctime: r.ctime,
+                sub_replies: Vec::new(),
+            },
+        );
+    }
+    let mut top_replies = Vec::new();
+    for r in replies.iter() {
+        if let Some(parent_rpid) = r.parent_rpid
+            && reply_map.contains_key(&parent_rpid)
+        {
+            let sub = reply_map.remove(&r.rpid).expect("reply should exist");
+            reply_map
+                .get_mut(&parent_rpid)
+                .expect("parent reply should exist")
+                .sub_replies
+                .push(sub);
+        } else {
+            top_replies.push(reply_map.remove(&r.rpid).expect("reply should exist"));
+        }
+    }
+    Ok(ApiResponse::ok(DynamicDetailResponse {
+        id: dyn_model.id.clone(),
+        dyn_type: dyn_model.dyn_type.clone(),
+        content: dyn_model.content.clone(),
+        pics,
+        stat: dyn_model.stat.clone().unwrap_or(serde_json::Value::Null),
+        pub_ts: dyn_model.pub_ts,
+        path: dyn_model.path.clone(),
+        replies: top_replies,
+    }))
 }
 
 /// 手动标记该动态源下所有动态重新同步评论

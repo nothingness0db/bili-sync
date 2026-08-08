@@ -8,6 +8,7 @@ import type {
 	DynamicListItem,
 	DynamicSourceDetail,
 	DynamicStatsResponse,
+	DynamicDetailResponse,
 	FavoritesResponse,
 	FullSyncVideoSourceRequest,
 	FullSyncVideoSourceResponse,
@@ -203,6 +204,10 @@ class ApiClient {
 		return this.post<boolean>(`/dynamic-sources/${id}/scan-profile`, null);
 	}
 
+	async getDynamicDetail(id: number, dynId: string): Promise<ApiResponse<DynamicDetailResponse>> {
+		return this.get<DynamicDetailResponse>(`/dynamic-sources/${id}/dynamics/${dynId}/detail`);
+	}
+
 	async getVideos(params?: VideosRequest): Promise<ApiResponse<VideosResponse>> {
 		return this.get<VideosResponse>('/videos', params as Record<string, unknown>);
 	}
@@ -368,6 +373,7 @@ const api = {
 	rescanAllReplies: (id: number) => apiClient.rescanAllReplies(id),
 	rescanSingleReply: (id: number, dynId: string) => apiClient.rescanSingleReply(id, dynId),
 	scanProfile: (id: number) => apiClient.scanProfile(id),
+	getDynamicDetail: (id: number, dynId: string) => apiClient.getDynamicDetail(id, dynId),
 	getVideos: (params?: VideosRequest) => apiClient.getVideos(params),
 	getVideo: (id: number) => apiClient.getVideo(id),
 	resetVideoStatus: (id: number, request: ResetVideoStatusRequest) =>

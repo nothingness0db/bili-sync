@@ -5,6 +5,7 @@
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
+	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import * as Chart from '$lib/components/ui/chart/index.js';
 	import MyChartTooltip from '$lib/components/custom/my-chart-tooltip.svelte';
@@ -14,13 +15,16 @@
 	import HistoryIcon from '@lucide/svelte/icons/history';
 	import MessagesSquareIcon from '@lucide/svelte/icons/messages-square';
 	import ScanSearchIcon from '@lucide/svelte/icons/scan-search';
+	import EyeIcon from '@lucide/svelte/icons/eye';
 	import UserIcon from '@lucide/svelte/icons/user';
 	import { toast } from 'svelte-sonner';
 	import { setBreadcrumb } from '$lib/stores/breadcrumb';
 	import type {
 		ApiError,
+		DynamicDetailResponse,
 		DynamicListItem,
 		DynamicStatsResponse,
+		ReplyItem,
 		StatPoint
 	} from '$lib/types';
 	import api from '$lib/api';
@@ -32,6 +36,34 @@
 	let rescanningAll = false;
 	let scanningProfile = false;
 	let rescanningIds = new Set<string>();
+
+	// 动态详情对话框
+	let showDetailDialog = false;
+	let detailLoading = false;
+	let detail: DynamicDetailResponse | null = null;
+
+	async function openDetail(dynId: string) {
+		showDetailDialog = true;
+		detailLoading = true;
+		detail = null;
+		try {
+			const response = await api.getDynamicDetail(sourceId, dynId);
+			detail = response.data;
+		} catch (error) {
+			toast.error('加载动态详情失败', {
+				description: (error as ApiError).message
+			});
+			showDetailDialog = false;
+		} finally {
+			detailLoading = false;
+		}
+	}
+
+	function statCount(stat: Record<string, unknown> | undefined, key: string): number {
+		if (!stat) return 0;
+		const v = stat[key] as { count?: number } | undefined;
+		return v?.count ?? 0;
+	}
 
 	// 指标配置（四个折线图）
 	const METRICS = [
@@ -336,6 +368,21 @@
 												<Button
 													size="sm"
 													variant="outline"
+													onclick={() => openDetail(dyn.id)}
+													class="h-8 w-8 p-0"
+												>
+													<EyeIcon class="h-3 w-3" />
+												</Button>
+											</Tooltip.Trigger>
+											<Tooltip.Content>
+												<p class="text-xs">查看正文与评论</p>
+											</Tooltip.Content>
+										</Tooltip.Root>
+										<Tooltip.Root disableHoverableContent={true}>
+											<Tooltip.Trigger>
+												<Button
+													size="sm"
+													variant="outline"
 													onclick={() => rescanSingle(dyn.id)}
 													disabled={rescanningIds.has(dyn.id)}
 													class="h-8 w-8 p-0"
@@ -363,4 +410,98 @@
 			<Button class="mt-4" onclick={loadData}>重新加载</Button>
 		</div>
 	{/if}
+
+	<!-- 动态详情对话框：正文 + 评论树 -->
+	<Dialog.Root bind:open={showDetailDialog}>
+		<Dialog.Content class="no-scrollbar max-h-[85vh] max-w-[90vw]! overflow-y-auto lg:max-w-[60vw]!">
+			<Dialog.Title class="text-lg font-semibold">
+				动态详情
+			</Dialog.Title>
+			{#if detailLoading}
+				<div class="flex items-center justify-center py-12">
+					<div class="text-muted-foreground">加载中...</div>
+				</div>
+			{:else if detail}
+				<div class="mt-4 space-y-4">
+					<!-- 动态元信息 -->
+					<div class="flex flex-wrap items-center gap-2 text-sm">
+						<Badge variant="secondary" class="font-mono text-xs">
+							{detail.dynType.replace('DYNAMIC_TYPE_', '')}
+						</Badge>
+						<span class="text-muted-foreground">
+							{new Date(detail.pubTs).toLocaleString('zh-CN')}
+						</span>
+						<Badge variant="secondary" class="flex items-center gap-1">
+							<MessagesSquareIcon class="h-3 w-3" />
+							评论 {statCount(detail.stat, 'comment')}
+						</Badge>
+						<Badge variant="secondary">赞 {statCount(detail.stat, 'like')}</Badge>
+						<Badge variant="secondary">转 {statCount(detail.stat, 'forward')}</Badge>
+						<span class="text-muted-foreground font-mono text-xs">{detail.id}</span>
+					</div>
+					<!-- 正文 -->
+					{#if detail.content}
+						<div class="bg-muted/50 whitespace-pre-wrap rounded-lg p-4 text-sm leading-relaxed">
+							{detail.content}
+						</div>
+					{:else}
+						<div class="text-muted-foreground text-sm">（该动态无正文文本）</div>
+					{/if}
+					<!-- 本地文件路径 -->
+					{#if detail.path}
+						<div class="text-muted-foreground font-mono text-xs">
+							落盘位置: {detail.path}
+						</div>
+					{/if}
+					<!-- 评论树 -->
+					<div>
+						<div class="mb-2 flex items-center gap-2">
+							<MessagesSquareIcon class="h-4 w-4" />
+							<span class="text-sm font-medium">评论（{detail.replies.length}）</span>
+						</div>
+						{#if detail.replies.length > 0}
+							<div class="space-y-4">
+								{#each detail.replies as reply (reply.rpid)}
+									{@render ReplyRow({ reply })}
+								{/each}
+							</div>
+						{:else}
+							<div class="text-muted-foreground py-6 text-center text-sm">暂无评论</div>
+						{/if}
+					</div>
+				</div>
+			{/if}
+		</Dialog.Content>
+	</Dialog.Root>
 </div>
+
+{#snippet ReplyRow({ reply, depth = 0 }: { reply: ReplyItem; depth?: number })}
+	<div class="flex gap-3" style="margin-left: {depth * 24}px">
+		{#if reply.avatar}
+			<img src={reply.avatar} alt={reply.uname} class="h-8 w-8 shrink-0 rounded-full" />
+		{:else}
+			<div class="bg-muted flex h-8 w-8 shrink-0 items-center justify-center rounded-full">
+				<UserIcon class="text-muted-foreground h-4 w-4" />
+			</div>
+		{/if}
+		<div class="min-w-0 flex-1">
+			<div class="flex flex-wrap items-center gap-2 text-xs">
+				<span class="font-medium">{reply.uname}</span>
+				<span class="text-muted-foreground">
+					{new Date(reply.ctime).toLocaleString('zh-CN')}
+				</span>
+				{#if reply.parentRpid}
+					<Badge variant="secondary" class="text-[10px]">楼中楼</Badge>
+				{/if}
+			</div>
+			<div class="text-muted-foreground mt-1 text-sm break-words">{reply.content || '（无内容）'}</div>
+			{#if reply.subReplies.length > 0}
+				<div class="mt-2 space-y-3">
+					{#each reply.subReplies as sub (sub.rpid)}
+						{@render ReplyRow({ reply: sub, depth: depth + 1 })}
+					{/each}
+				</div>
+			{/if}
+		</div>
+	</div>
+{/snippet}

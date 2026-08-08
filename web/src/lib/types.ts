@@ -296,6 +296,28 @@ export interface DynamicListItem {
 	path: string;
 }
 
+export interface ReplyItem {
+	rpid: number;
+	parentRpid: number | null;
+	uname: string;
+	avatar: string;
+	content: string;
+	images: string[];
+	ctime: string;
+	subReplies: ReplyItem[];
+}
+
+export interface DynamicDetailResponse {
+	id: string;
+	dynType: string;
+	content: string;
+	pics: string[];
+	stat: Record<string, unknown>;
+	pubTs: string;
+	path: string;
+	replies: ReplyItem[];
+}
+
 export interface UpdateVideoSourceRequest {
 	path: string;
 	enabled: boolean;

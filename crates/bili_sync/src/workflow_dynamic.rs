@@ -56,6 +56,12 @@ pub async fn update_upper_stat(
     let profile = match upper.get_profile().await {
         Ok(profile) => profile,
         Err(e) => {
+            // 触发风控时立即向上抛出终止本轮任务，避免继续请求延长封锁
+            if let Some(inner) = e.downcast_ref::<BiliError>()
+                && inner.is_risk_control_related()
+            {
+                return Err(e);
+            }
             warn!("获取「{}」账号信息失败：{:#}", source.upper_name, e);
             return Ok(());
         }

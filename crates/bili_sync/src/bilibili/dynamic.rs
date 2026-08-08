@@ -8,8 +8,8 @@ use tokio::time::{Duration, sleep};
 
 use crate::bilibili::{BiliClient, Credential, ErrorForStatusExt, MIXIN_KEY, Validate, VideoInfo, WbiSign};
 
-/// 动态列表接口请求间隔，该接口风控敏感（文档注明存在运气成分），保守节流
-const DYNAMIC_FEED_INTERVAL: Duration = Duration::from_millis(600);
+/// 动态列表接口请求间隔，与视频接口节奏对齐（全局限流器 250ms/4 之上再加 250ms）
+const DYNAMIC_FEED_INTERVAL: Duration = Duration::from_millis(250);
 
 pub struct Dynamic<'a> {
     client: &'a BiliClient,
