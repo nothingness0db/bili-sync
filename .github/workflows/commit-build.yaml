@@ -8,4 +8,4 @@ on:
 jobs:
   build-binary:
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-    uses: amtoaer/bili-sync/.github/workflows/build-binary.yaml@main
+    uses: nothingness0db/bili-sync/.github/workflows/build-binary.yaml@main
