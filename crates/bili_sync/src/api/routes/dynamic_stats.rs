@@ -166,9 +166,14 @@ pub async fn get_dynamic_source_dynamics(
         .order_by_desc(dynamic::Column::PubTs)
         .all(&db)
         .await?;
-    let items = dynamics
-        .into_iter()
-        .map(|d| DynamicListItem {
+    let mut items = Vec::with_capacity(dynamics.len());
+    for d in dynamics {
+        let reply_count = reply::Entity::find()
+            .filter(reply::Column::DynamicId.eq(&d.id))
+            .count(&db)
+            .await
+            .unwrap_or(0) as i64;
+        items.push(DynamicListItem {
             id: d.id.clone(),
             dyn_type: d.dyn_type.clone(),
             content: d.content.chars().take(100).collect(),
@@ -178,10 +183,11 @@ pub async fn get_dynamic_source_dynamics(
                 .as_ref()
                 .and_then(|s| s["comment"]["count"].as_i64())
                 .unwrap_or(0),
+            reply_count,
             rescan_reply: d.rescan_reply,
             path: d.path,
-        })
-        .collect();
+        });
+    }
     Ok(ApiResponse::ok(items))
 }
 

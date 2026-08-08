@@ -53,8 +53,59 @@ pub async fn process_dynamic_source(
     // 记录账号信息快照（粉丝/关注/投稿/播放/名字/签名），有变化才插入新记录
     update_upper_stat(&source, bili_client, connection, config).await?;
     refresh_dynamic_source(&source, bili_client, connection, config).await?;
+    // 评论补拉：5 天窗口外的历史动态，若 API 评论数 > 0 但本地无评论，自动标记重扫
+    backfill_missing_replies(&source, connection).await?;
     process_unhandled_dynamics(&source, bili_client, connection, config).await?;
     info!("处理动态源「{}」完成", source.upper_name);
+    Ok(())
+}
+
+/// 评论补拉：对已完成的动态，若 API 评论数 > 0 但本地无评论，自动标记重扫
+///
+/// 解决首次全量导入时 5 天窗口外历史动态评论被永久跳过的问题。
+/// 每轮限量检查，标记后由 process_unhandled_dynamics 按慢任务队列消化。
+async fn backfill_missing_replies(source: &dynamic_source::Model, connection: &DatabaseConnection) -> Result<()> {
+    /// 每轮最多检查的已完成动态数
+    const BACKFILL_CHECK_LIMIT: u64 = 50;
+    let mut candidates = dynamic::Entity::find()
+        .filter(dynamic::Column::SourceId.eq(source.id))
+        .filter(dynamic::Column::Valid.eq(true))
+        .filter(dynamic::Column::DownloadStatus.gte(STATUS_COMPLETED))
+        .filter(dynamic::Column::RescanReply.eq(false))
+        .order_by_desc(dynamic::Column::PubTs)
+        .all(connection)
+        .await?;
+    candidates.truncate(BACKFILL_CHECK_LIMIT as usize);
+    let mut marked = 0;
+    for dyn_model in candidates {
+        // API 评论数（来自动态抓取时的 stat 快照）
+        let api_count = dyn_model
+            .stat
+            .as_ref()
+            .and_then(|s| s["comment"]["count"].as_i64())
+            .unwrap_or(0);
+        if api_count <= 0 {
+            continue;
+        }
+        // 本地已同步的评论数
+        let local_count = reply::Entity::find()
+            .filter(reply::Column::DynamicId.eq(&dyn_model.id))
+            .count(connection)
+            .await?;
+        if local_count > 0 {
+            continue;
+        }
+        let mut model: dynamic::ActiveModel = dyn_model.into();
+        model.rescan_reply = Set(true);
+        model.save(connection).await?;
+        marked += 1;
+    }
+    if marked > 0 {
+        info!(
+            "「{}」评论补拉：标记 {} 条历史动态待重扫评论（每轮限量消化）",
+            source.upper_name, marked
+        );
+    }
     Ok(())
 }
 

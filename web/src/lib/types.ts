@@ -293,6 +293,7 @@ export interface DynamicListItem {
 	content: string;
 	pubTs: string;
 	commentCount: number;
+	replyCount: number;
 	rescanReply: boolean;
 	path: string;
 }

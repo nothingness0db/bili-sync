@@ -60,6 +60,8 @@ pub struct DynamicListItem {
     pub content: String,
     pub pub_ts: DateTime,
     pub comment_count: i64,
+    /// 本地已同步的评论数
+    pub reply_count: i64,
     pub rescan_reply: bool,
     pub path: String,
 }
