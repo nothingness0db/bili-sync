@@ -3,9 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Result, bail};
 use leaky_bucket::RateLimiter;
-use parking_lot::Once;
 use reqwest::{Method, header};
-use ua_generator::ua;
 
 use crate::bilibili::Credential;
 use crate::bilibili::credential::WbiImg;
@@ -17,17 +15,11 @@ pub struct Client(reqwest::Client);
 
 impl Client {
     pub fn new() -> Self {
-        static INIT: Once = Once::new();
-        INIT.call_once(|| {
-            rustls::crypto::ring::default_provider()
-                .install_default()
-                .expect("Failed to install rustls crypto provider");
-        });
         // 正常访问 api 所必须的 header，作为默认 header 添加到每个请求中
         let mut headers = header::HeaderMap::new();
         headers.insert(
             header::USER_AGENT,
-            header::HeaderValue::from_static(ua::spoof_chrome_ua()),
+            header::HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
         );
         headers.insert(
             header::REFERER,
@@ -37,6 +29,7 @@ impl Client {
             reqwest::Client::builder()
                 .default_headers(headers)
                 .gzip(true)
+                .http1_only()
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .read_timeout(std::time::Duration::from_secs(10))
                 .build()
@@ -56,6 +49,14 @@ impl Client {
                     credential.buvid3, credential.sessdata, credential.bili_jct, credential.dedeuserid
                 ),
             );
+        }
+        if std::env::var("BILI_SYNC_DEBUG_HEADERS").is_ok()
+            && let Some(Ok(built)) = req.try_clone().map(|rb| rb.build())
+        {
+            debug!("request url: {}", built.url());
+            for (name, value) in built.headers() {
+                debug!("  {}: {:?}", name, value);
+            }
         }
         req
     }

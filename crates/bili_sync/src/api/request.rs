@@ -132,6 +132,25 @@ pub struct InsertSubmissionRequest {
 }
 
 #[derive(Deserialize, Validate)]
+pub struct InsertDynamicSourceRequest {
+    pub upper_id: i64,
+    #[validate(custom(function = "crate::utils::validation::validate_path"))]
+    pub path: String,
+    #[serde(default)]
+    pub sync_reply: bool,
+}
+
+#[derive(Deserialize, Validate)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateDynamicSourceRequest {
+    #[validate(custom(function = "crate::utils::validation::validate_path"))]
+    pub path: String,
+    pub enabled: bool,
+    #[serde(default)]
+    pub sync_reply: bool,
+}
+
+#[derive(Deserialize, Validate)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateVideoSourceRequest {
     #[validate(custom(function = "crate::utils::validation::validate_path"))]

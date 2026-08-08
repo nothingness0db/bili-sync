@@ -12,6 +12,8 @@ use crate::config::VersionedConfig;
 
 mod config;
 mod dashboard;
+mod dynamic_sources;
+mod dynamic_stats;
 mod login;
 mod me;
 mod task;
@@ -28,6 +30,8 @@ pub fn router() -> Router {
             .merge(me::router())
             .merge(login::router())
             .merge(video_sources::router())
+            .merge(dynamic_sources::router())
+            .merge(dynamic_stats::router())
             .merge(videos::router())
             .merge(dashboard::router())
             .merge(ws::router())

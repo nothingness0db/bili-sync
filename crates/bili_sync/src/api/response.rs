@@ -16,6 +16,70 @@ pub struct VideoSourcesResponse {
 }
 
 #[derive(Serialize)]
+pub struct DynamicSourcesResponse {
+    pub dynamic_sources: Vec<DynamicSourceDetail>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicStatsResponse {
+    pub upper_name: String,
+    pub upper_id: i64,
+    /// 数值时间序列（粉丝/关注/投稿/播放）
+    pub stats: Vec<StatPoint>,
+    /// 名字/签名/头像版本历史
+    pub versions: Vec<UpperVersion>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatPoint {
+    pub recorded_at: DateTime,
+    pub fan_count: i64,
+    pub follow_count: i64,
+    pub video_count: i64,
+    pub view_count: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpperVersion {
+    pub name: String,
+    pub sign: String,
+    pub face: String,
+    pub start_at: DateTime,
+    pub end_at: Option<DateTime>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicListItem {
+    pub id: String,
+    pub dyn_type: String,
+    pub content: String,
+    pub pub_ts: DateTime,
+    pub comment_count: i64,
+    pub rescan_reply: bool,
+    pub path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DynamicSourceDetail {
+    pub id: i32,
+    pub upper_id: i64,
+    pub upper_name: String,
+    pub path: String,
+    pub sync_reply: bool,
+    pub enabled: bool,
+    pub latest_dyn_at: Option<DateTime>,
+    #[serde(default)]
+    pub dynamic_count: i64,
+    #[serde(default)]
+    pub reply_count: usize,
+}
+
+#[derive(Serialize)]
 pub struct VideosResponse {
     pub videos: Vec<VideoInfo>,
     pub total_count: u64,

@@ -4,8 +4,12 @@ pub mod prelude;
 
 pub mod collection;
 pub mod config;
+pub mod dynamic;
+pub mod dynamic_source;
 pub mod favorite;
 pub mod page;
+pub mod reply;
 pub mod submission;
+pub mod upper_stat;
 pub mod video;
 pub mod watch_later;

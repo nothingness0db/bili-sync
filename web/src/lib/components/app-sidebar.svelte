@@ -5,6 +5,7 @@
 	import FilePlayIcon from '@lucide/svelte/icons/file-play';
 	import FoldersIcon from '@lucide/svelte/icons/folders';
 	import HeartIcon from '@lucide/svelte/icons/heart';
+	import MessagesSquareIcon from '@lucide/svelte/icons/messages-square';
 	import PaletteIcon from '@lucide/svelte/icons/palette';
 	import Settings2Icon from '@lucide/svelte/icons/settings-2';
 	import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
@@ -52,6 +53,11 @@
 						title: '视频源',
 						icon: DatabaseIcon,
 						href: '/video-sources'
+					},
+					{
+						title: '动态源',
+						icon: MessagesSquareIcon,
+						href: '/dynamic-sources'
 					}
 				]
 			},

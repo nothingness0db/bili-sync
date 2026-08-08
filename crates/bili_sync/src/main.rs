@@ -12,6 +12,7 @@ mod notifier;
 mod task;
 mod utils;
 mod workflow;
+mod workflow_dynamic;
 
 use std::collections::VecDeque;
 use std::fmt::Debug;

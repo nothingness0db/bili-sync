@@ -11,13 +11,15 @@ pub use client::{BiliClient, Client};
 pub use collection::{Collection, CollectionItem, CollectionType};
 pub use credential::{Credential, PollStatus, Qrcode};
 pub use danmaku::DanmakuOption;
-pub use dynamic::Dynamic;
+pub use dynamic::{Dynamic, DynamicFeed, DynamicInfo};
 pub use error::BiliError;
 pub use favorite_list::FavoriteList;
 pub use me::Me;
 use once_cell::sync::Lazy;
+pub use reply::{Reply, ReplyInfo};
 use reqwest::{RequestBuilder, StatusCode};
 pub use submission::Submission;
+pub use upper::UpperInfo;
 pub use video::{Dimension, PageInfo, Video};
 pub use watch_later::WatchLater;
 
@@ -30,8 +32,10 @@ mod dynamic;
 mod error;
 mod favorite_list;
 mod me;
+mod reply;
 mod submission;
 mod subtitle;
+mod upper;
 mod video;
 mod watch_later;
 

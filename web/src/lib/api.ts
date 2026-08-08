@@ -5,14 +5,18 @@ import type {
 	CollectionsResponse,
 	Config,
 	DashBoardResponse,
+	DynamicListItem,
+	DynamicSourceDetail,
+	DynamicStatsResponse,
 	FavoritesResponse,
 	FullSyncVideoSourceRequest,
 	FullSyncVideoSourceResponse,
-	QrcodeGenerateResponse as GenerateQrcodeResponse,
+	InsertDynamicSourceRequest,
 	InsertCollectionRequest,
 	InsertFavoriteRequest,
 	InsertSubmissionRequest,
 	Notifier,
+	QrcodeGenerateResponse as GenerateQrcodeResponse,
 	QrcodePollResponse as PollQrcodeResponse,
 	ResetFilteredVideosResponse,
 	ResetFilteredVideoStatusRequest,
@@ -20,6 +24,7 @@ import type {
 	ResetVideoStatusRequest,
 	SysInfo,
 	TaskStatus,
+	UpdateDynamicSourceRequest,
 	UpdateFilteredVideoStatusRequest,
 	UpdateFilteredVideoStatusResponse,
 	UpdateVideoSourceRequest,
@@ -155,6 +160,47 @@ class ApiClient {
 
 	async getVideoSources(): Promise<ApiResponse<VideoSourcesResponse>> {
 		return this.get<VideoSourcesResponse>('/video-sources');
+	}
+
+	async getDynamicSources(): Promise<ApiResponse<DynamicSourceDetail[]>> {
+		return this.get<DynamicSourceDetail[]>('/dynamic-sources/details');
+	}
+
+	async insertDynamicSource(
+		request: InsertDynamicSourceRequest
+	): Promise<ApiResponse<boolean>> {
+		return this.post<boolean>('/dynamic-sources', request);
+	}
+
+	async updateDynamicSource(
+		id: number,
+		request: UpdateDynamicSourceRequest
+	): Promise<ApiResponse<boolean>> {
+		return this.put<boolean>(`/dynamic-sources/${id}`, request);
+	}
+
+	async removeDynamicSource(id: number): Promise<ApiResponse<boolean>> {
+		return this.request<boolean>(`/dynamic-sources/${id}`, 'DELETE');
+	}
+
+	async getDynamicSourceStats(id: number): Promise<ApiResponse<DynamicStatsResponse>> {
+		return this.get<DynamicStatsResponse>(`/dynamic-sources/${id}/stats`);
+	}
+
+	async getDynamicSourceDynamics(id: number): Promise<ApiResponse<DynamicListItem[]>> {
+		return this.get<DynamicListItem[]>(`/dynamic-sources/${id}/dynamics`);
+	}
+
+	async rescanAllReplies(id: number): Promise<ApiResponse<number>> {
+		return this.post<number>(`/dynamic-sources/${id}/rescan-replies`, null);
+	}
+
+	async rescanSingleReply(id: number, dynId: string): Promise<ApiResponse<boolean>> {
+		return this.post<boolean>(`/dynamic-sources/${id}/dynamics/${dynId}/rescan-reply`, null);
+	}
+
+	async scanProfile(id: number): Promise<ApiResponse<boolean>> {
+		return this.post<boolean>(`/dynamic-sources/${id}/scan-profile`, null);
 	}
 
 	async getVideos(params?: VideosRequest): Promise<ApiResponse<VideosResponse>> {
@@ -312,6 +358,16 @@ export const apiClient = new ApiClient();
 // 导出 API 方法的便捷函数
 const api = {
 	getVideoSources: () => apiClient.getVideoSources(),
+	getDynamicSources: () => apiClient.getDynamicSources(),
+	insertDynamicSource: (request: InsertDynamicSourceRequest) => apiClient.insertDynamicSource(request),
+	updateDynamicSource: (id: number, request: UpdateDynamicSourceRequest) =>
+		apiClient.updateDynamicSource(id, request),
+	removeDynamicSource: (id: number) => apiClient.removeDynamicSource(id),
+	getDynamicSourceStats: (id: number) => apiClient.getDynamicSourceStats(id),
+	getDynamicSourceDynamics: (id: number) => apiClient.getDynamicSourceDynamics(id),
+	rescanAllReplies: (id: number) => apiClient.rescanAllReplies(id),
+	rescanSingleReply: (id: number, dynId: string) => apiClient.rescanSingleReply(id, dynId),
+	scanProfile: (id: number) => apiClient.scanProfile(id),
 	getVideos: (params?: VideosRequest) => apiClient.getVideos(params),
 	getVideo: (id: number) => apiClient.getVideo(id),
 	resetVideoStatus: (id: number, request: ResetVideoStatusRequest) =>

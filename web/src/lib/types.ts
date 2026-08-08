@@ -235,6 +235,67 @@ export interface VideoSourcesDetailsResponse {
 	watch_later: VideoSourceDetail[];
 }
 
+export interface DynamicSourceDetail {
+	id: number;
+	upperId: number;
+	upperName: string;
+	path: string;
+	syncReply: boolean;
+	enabled: boolean;
+	latestDynAt: string | null;
+	dynamicCount: number;
+	replyCount: number;
+}
+
+export interface DynamicSourcesResponse {
+	dynamic_sources: DynamicSourceDetail[];
+}
+
+export interface InsertDynamicSourceRequest {
+	upper_id: number;
+	path: string;
+	sync_reply?: boolean;
+}
+
+export interface UpdateDynamicSourceRequest {
+	path: string;
+	enabled: boolean;
+	syncReply: boolean;
+}
+
+export interface StatPoint {
+	recordedAt: string;
+	fanCount: number;
+	followCount: number;
+	videoCount: number;
+	viewCount: number;
+}
+
+export interface UpperVersion {
+	name: string;
+	sign: string;
+	face: string;
+	startAt: string;
+	endAt: string | null;
+}
+
+export interface DynamicStatsResponse {
+	upperName: string;
+	upperId: number;
+	stats: StatPoint[];
+	versions: UpperVersion[];
+}
+
+export interface DynamicListItem {
+	id: string;
+	dynType: string;
+	content: string;
+	pubTs: string;
+	commentCount: number;
+	rescanReply: boolean;
+	path: string;
+}
+
 export interface UpdateVideoSourceRequest {
 	path: string;
 	enabled: boolean;

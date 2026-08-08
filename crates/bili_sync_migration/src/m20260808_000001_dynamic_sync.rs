@@ -1,0 +1,165 @@
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .create_table(
+                Table::create()
+                    .table(DynamicSource::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(DynamicSource::Id)
+                            .unsigned()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(DynamicSource::UpperId).unique_key().unsigned().not_null())
+                    .col(ColumnDef::new(DynamicSource::UpperName).string().not_null())
+                    .col(ColumnDef::new(DynamicSource::Path).string().not_null())
+                    .col(
+                        ColumnDef::new(DynamicSource::CreatedAt)
+                            .timestamp()
+                            .default(Expr::current_timestamp())
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(DynamicSource::LatestDynAt)
+                            .timestamp()
+                            .default(Expr::current_timestamp())
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(DynamicSource::SyncReply).boolean().default(false).not_null())
+                    .col(ColumnDef::new(DynamicSource::Enabled).boolean().default(false).not_null())
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
+                    .table(Dynamic::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(Dynamic::Id).string().not_null().primary_key())
+                    .col(ColumnDef::new(Dynamic::SourceId).unsigned().not_null())
+                    .col(ColumnDef::new(Dynamic::DynType).string().not_null())
+                    .col(ColumnDef::new(Dynamic::Content).string().not_null())
+                    .col(ColumnDef::new(Dynamic::Pics).json().null())
+                    .col(ColumnDef::new(Dynamic::Stat).json().null())
+                    .col(
+                        ColumnDef::new(Dynamic::PubTs)
+                            .timestamp()
+                            .default(Expr::current_timestamp())
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(Dynamic::CommentType).integer().default(-1).not_null())
+                    .col(ColumnDef::new(Dynamic::CommentOid).string().default("").not_null())
+                    .col(ColumnDef::new(Dynamic::Raw).text().null())
+                    .col(ColumnDef::new(Dynamic::DownloadStatus).unsigned().default(0).not_null())
+                    .col(ColumnDef::new(Dynamic::Path).string().default("").not_null())
+                    .col(ColumnDef::new(Dynamic::Valid).boolean().default(true).not_null())
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_table(
+                Table::create()
+                    .table(Reply::Table)
+                    .if_not_exists()
+                    .col(ColumnDef::new(Reply::Rpid).big_unsigned().not_null().primary_key())
+                    .col(ColumnDef::new(Reply::DynamicId).string().not_null())
+                    .col(ColumnDef::new(Reply::ParentRpid).big_unsigned().null())
+                    .col(ColumnDef::new(Reply::Uname).string().not_null())
+                    .col(ColumnDef::new(Reply::Avatar).string().not_null())
+                    .col(ColumnDef::new(Reply::Content).string().not_null())
+                    .col(ColumnDef::new(Reply::Images).json().null())
+                    .col(ColumnDef::new(Reply::Ctime).timestamp().not_null())
+                    .col(ColumnDef::new(Reply::Raw).text().null())
+                    .col(ColumnDef::new(Reply::DownloadStatus).unsigned().default(0).not_null())
+                    .col(ColumnDef::new(Reply::Valid).boolean().default(true).not_null())
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .table(Dynamic::Table)
+                    .name("idx_dynamic_source_pubts")
+                    .col(Dynamic::SourceId)
+                    .col(Dynamic::PubTs)
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .create_index(
+                Index::create()
+                    .table(Reply::Table)
+                    .name("idx_reply_dynamic")
+                    .col(Reply::DynamicId)
+                    .to_owned(),
+            )
+            .await
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .drop_table(Table::drop().table(Reply::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Dynamic::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(DynamicSource::Table).to_owned())
+            .await
+    }
+}
+
+#[derive(DeriveIden)]
+enum DynamicSource {
+    Table,
+    Id,
+    UpperId,
+    UpperName,
+    Path,
+    CreatedAt,
+    LatestDynAt,
+    SyncReply,
+    Enabled,
+}
+
+#[derive(DeriveIden)]
+enum Dynamic {
+    Table,
+    Id,
+    SourceId,
+    DynType,
+    Content,
+    Pics,
+    Stat,
+    PubTs,
+    CommentType,
+    CommentOid,
+    Raw,
+    DownloadStatus,
+    Path,
+    Valid,
+}
+
+#[derive(DeriveIden)]
+enum Reply {
+    Table,
+    Rpid,
+    DynamicId,
+    ParentRpid,
+    Uname,
+    Avatar,
+    Content,
+    Images,
+    Ctime,
+    Raw,
+    DownloadStatus,
+    Valid,
+}

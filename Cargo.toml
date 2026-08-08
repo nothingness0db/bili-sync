@@ -56,12 +56,11 @@ reqwest = { version = "0.13.4", features = [
     "gzip",
     "http2",
     "json",
-    "rustls-no-provider",
+    "native-tls",
     "stream",
 ], default-features = false }
 rsa = { version = "0.10.0-rc.18", features = ["sha2"] }
 rust-embed-for-web = { git = "https://github.com/amtoaer/rust-embed-for-web", tag = "v1.0.0" }
-rustls = { version = "0.23.41", default-features = false, features = ["ring"] }
 sea-orm = { version = "1.1.20", features = [
     "macros",
     "runtime-tokio",

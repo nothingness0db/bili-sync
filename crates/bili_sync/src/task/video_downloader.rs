@@ -11,9 +11,10 @@ use tokio_cron_scheduler::{Job, JobScheduler};
 use crate::adapter::VideoSource;
 use crate::bilibili::{self, BiliClient, BiliError};
 use crate::config::{ARGS, Config, TEMPLATE, Trigger, VersionedConfig};
-use crate::utils::model::get_enabled_video_sources;
+use crate::utils::model::{get_enabled_dynamic_sources, get_enabled_video_sources};
 use crate::utils::notify::error_and_notify;
 use crate::workflow::process_video_source;
+use crate::workflow_dynamic::process_dynamic_source;
 
 static INSTANCE: OnceCell<DownloadTaskManager> = OnceCell::const_new();
 
@@ -355,7 +356,7 @@ async fn download_video(
         .await
         .context("获取视频源列表失败")?;
     if video_sources.is_empty() {
-        bail!("没有可用的视频源");
+        warn!("没有可用的视频源");
     }
     for video_source in video_sources {
         let display_name = video_source.display_name();
@@ -364,6 +365,27 @@ async fn download_video(
                 config,
                 &bili_client,
                 format!("处理 {} 时遇到错误：{:#}，跳过该视频源", display_name, e),
+                &e,
+            );
+            if let Ok(e) = e.downcast::<BiliError>()
+                && e.is_risk_control_related()
+            {
+                warn!("检测到风控，终止此轮视频下载任务..");
+                return Ok(());
+            }
+        }
+    }
+    // 处理动态源
+    let dynamic_sources = get_enabled_dynamic_sources(connection)
+        .await
+        .context("获取动态源列表失败")?;
+    for dynamic_source in dynamic_sources {
+        let display_name = dynamic_source.upper_name.clone();
+        if let Err(e) = process_dynamic_source(dynamic_source, &bili_client, connection, config).await {
+            error_and_notify(
+                config,
+                &bili_client,
+                format!("处理动态源 {} 时遇到错误：{:#}，跳过该动态源", display_name, e),
                 &e,
             );
             if let Ok(e) = e.downcast::<BiliError>()
