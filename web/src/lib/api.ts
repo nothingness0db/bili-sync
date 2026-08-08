@@ -202,6 +202,10 @@ class ApiClient {
 		return this.post<boolean>(`/dynamic-sources/${id}/scan-profile`, null);
 	}
 
+	async syncNow(id: number): Promise<ApiResponse<boolean>> {
+		return this.post<boolean>(`/dynamic-sources/${id}/sync-now`, null);
+	}
+
 	async getDynamicDetail(id: number, dynId: string): Promise<ApiResponse<DynamicDetailResponse>> {
 		return this.get<DynamicDetailResponse>(`/dynamic-sources/${id}/dynamics/${dynId}/detail`);
 	}
@@ -372,6 +376,7 @@ const api = {
 	rescanAllReplies: (id: number) => apiClient.rescanAllReplies(id),
 	rescanSingleReply: (id: number, dynId: string) => apiClient.rescanSingleReply(id, dynId),
 	scanProfile: (id: number) => apiClient.scanProfile(id),
+	syncNow: (id: number) => apiClient.syncNow(id),
 	getDynamicDetail: (id: number, dynId: string) => apiClient.getDynamicDetail(id, dynId),
 	getVideos: (params?: VideosRequest) => apiClient.getVideos(params),
 	getVideo: (id: number) => apiClient.getVideo(id),

@@ -152,7 +152,17 @@ async fn refresh_dynamic_source(
     config: &Config,
 ) -> Result<()> {
     info!("开始扫描「{}」的动态..", source.upper_name);
-    let latest_row_at = source.latest_dyn_at.and_utc();
+    // 该源还没有任何动态记录时（首次全量导入），忽略记录时间，避免新源只拉到置顶的一条
+    let has_dynamics = dynamic::Entity::find()
+        .filter(dynamic::Column::SourceId.eq(source.id))
+        .count(connection)
+        .await?
+        > 0;
+    let latest_row_at = if has_dynamics {
+        source.latest_dyn_at.and_utc()
+    } else {
+        chrono::DateTime::<chrono::Utc>::from_timestamp(0, 0).unwrap_or_default()
+    };
     let mut max_datetime = latest_row_at;
     let mut count = 0;
     let mut error = Ok(());

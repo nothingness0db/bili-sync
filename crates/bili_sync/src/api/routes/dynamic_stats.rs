@@ -21,12 +21,13 @@ use crate::api::response::{
 use crate::api::wrapper::{ApiError, ApiResponse};
 use crate::bilibili::BiliClient;
 use crate::config::VersionedConfig;
-use crate::workflow_dynamic::{ensure_mixin_key, update_upper_stat};
+use crate::workflow_dynamic::{ensure_mixin_key, process_dynamic_source, update_upper_stat};
 
 pub(super) fn router() -> Router {
     Router::new()
         .route("/dynamic-sources/{id}/stats", get(get_dynamic_source_stats))
         .route("/dynamic-sources/{id}/scan-profile", post(scan_profile))
+        .route("/dynamic-sources/{id}/sync-now", post(sync_now))
         .route("/dynamic-sources/{id}/dynamics", get(get_dynamic_source_dynamics))
         .route(
             "/dynamic-sources/{id}/dynamics/{dyn_id}/detail",
@@ -257,6 +258,26 @@ pub async fn get_dynamic_detail(
         path: dyn_model.path.clone(),
         replies: top_replies,
     }))
+}
+
+/// 立即执行一轮完整的动态同步（账号快照 + 动态列表 + 评论），不等定时任务
+pub async fn sync_now(
+    Path(id): Path<i32>,
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(bili_client): Extension<Arc<BiliClient>>,
+) -> Result<ApiResponse<bool>, ApiError> {
+    let Some(source) = dynamic_source::Entity::find_by_id(id).one(&db).await? else {
+        return Err(InnerApiError::NotFound(id).into());
+    };
+    let connection = db.clone();
+    tokio::spawn(async move {
+        let config = VersionedConfig::get().snapshot();
+        match process_dynamic_source(source, &bili_client, &connection, &config).await {
+            Ok(()) => info!("手动触发的动态同步完成"),
+            Err(e) => error!("手动触发的动态同步失败：{:#}", e),
+        }
+    });
+    Ok(ApiResponse::ok(true))
 }
 
 /// 手动标记该动态源下所有动态重新同步评论

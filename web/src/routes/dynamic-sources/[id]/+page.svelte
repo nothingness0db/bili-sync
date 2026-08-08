@@ -11,6 +11,7 @@
 	import { AreaChart } from 'layerchart';
 	import { curveNatural } from 'd3-shape';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+	import PlayIcon from '@lucide/svelte/icons/play';
 	import HistoryIcon from '@lucide/svelte/icons/history';
 	import MessagesSquareIcon from '@lucide/svelte/icons/messages-square';
 	import ScanSearchIcon from '@lucide/svelte/icons/scan-search';
@@ -35,6 +36,7 @@
 	let loading = false;
 	let rescanningAll = false;
 	let scanningProfile = false;
+	let syncingNow = false;
 	let rescanningIds = new SvelteSet<string>();
 
 	// 动态详情对话框
@@ -131,6 +133,22 @@
 		}
 	}
 
+	async function syncNow() {
+		syncingNow = true;
+		try {
+			await api.syncNow(sourceId);
+			toast.success('已触发同步', {
+				description: '后台立即执行一轮完整同步（账号数据 + 动态 + 评论），进度见日志页'
+			});
+		} catch (error) {
+			toast.error('触发失败', {
+				description: (error as ApiError).message
+			});
+		} finally {
+			syncingNow = false;
+		}
+	}
+
 	async function rescanAll() {
 		rescanningAll = true;
 		try {
@@ -204,6 +222,16 @@
 					</div>
 				</div>
 			</div>
+			<Button
+				size="sm"
+				variant="outline"
+				onclick={syncNow}
+				disabled={syncingNow}
+				class="flex items-center gap-2"
+			>
+				<PlayIcon class="h-3.5 w-3.5" />
+				{syncingNow ? '触发中...' : '立即同步'}
+			</Button>
 			<Button
 				size="sm"
 				variant="outline"

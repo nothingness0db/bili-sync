@@ -95,6 +95,10 @@ pub async fn insert_dynamic_source(
         path: Set(request.path),
         sync_reply: Set(request.sync_reply),
         enabled: Set(false),
+        // 新源必须从 epoch 开始，否则首次扫描只会拉到置顶的一条动态
+        latest_dyn_at: Set(chrono::DateTime::from_timestamp(0, 0)
+            .expect("epoch is valid")
+            .naive_utc()),
         ..Default::default()
     })
     .exec(&db)
