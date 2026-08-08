@@ -317,8 +317,7 @@ fn render_module_dynamic(modules: &Value, dyn_type: &str) -> String {
             .as_str()
             .map(|id| format!("\n原动态链接: https://www.bilibili.com/opus/{id}"))
             .unwrap_or_default();
-            parts.push(format!("---- 转发自 @{upper_name} ----\n{origin_content}{jump}"));
-        }
+        parts.push(format!("---- 转发自 @{upper_name} ----\n{origin_content}{jump}"));
     }
     parts
         .into_iter()
