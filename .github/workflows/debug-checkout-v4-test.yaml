@@ -1,0 +1,13 @@
+name: Debug Checkout v4 Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout v4
+        uses: actions/checkout@v4
+      - name: Hello
+        run: echo "checkout v4 works"
