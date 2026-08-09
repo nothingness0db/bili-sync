@@ -393,10 +393,14 @@
 											<Badge class="flex w-fit items-center gap-1.5 bg-rose-700 text-rose-100">
 												待处理
 											</Badge>
-										{:else if dyn.commentCount > 0 && dyn.replyCount < dyn.commentCount}
+										{:else if dyn.commentCount > 0 && dyn.replyCount === 0}
 											<Badge class="flex w-fit items-center gap-1.5 bg-amber-600 text-amber-50">
 												<RefreshCwIcon class="h-3 w-3" />
-												评论待补拉（{dyn.replyCount}/{dyn.commentCount}）
+												评论待补拉
+											</Badge>
+										{:else if dyn.commentCount > 0 && dyn.replyCount < dyn.commentCount}
+											<Badge variant="secondary" class="flex w-fit items-center gap-1.5">
+												评论部分同步（{dyn.replyCount}/{dyn.commentCount}）
 											</Badge>
 										{:else}
 											<Badge

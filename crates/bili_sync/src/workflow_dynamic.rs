@@ -6,7 +6,7 @@ use futures::StreamExt;
 use sea_orm::ActiveValue::Set;
 use sea_orm::QueryOrder;
 use sea_orm::entity::prelude::*;
-use sea_orm::sea_query::OnConflict;
+use sea_orm::sea_query::{Condition, OnConflict};
 use serde_json::Value;
 use tokio::fs;
 
@@ -298,7 +298,12 @@ async fn process_unhandled_dynamics(
     let dynamics = dynamic::Entity::find()
         .filter(dynamic::Column::SourceId.eq(source.id))
         .filter(dynamic::Column::Valid.eq(true))
-        .filter(dynamic::Column::DownloadStatus.lt(STATUS_COMPLETED))
+        // 未完成的动态 + 被标记重扫评论的已完成动态（backfill 标记的也在此列）
+        .filter(
+            Condition::any()
+                .add(dynamic::Column::DownloadStatus.lt(STATUS_COMPLETED))
+                .add(dynamic::Column::RescanReply.eq(true)),
+        )
         .order_by_desc(dynamic::Column::PubTs)
         .all(connection)
         .await
@@ -368,16 +373,18 @@ async fn process_dynamic(
         raw: Value::Null,
     };
     fs::write(dir.join("content.md"), render_dynamic_md(&info, &source.upper_name)).await?;
-    // 下载正文图片
-    let pics_dir = dir.join("pics");
-    for (i, url) in info.pics.iter().enumerate() {
-        downloader
-            .fetch(
-                url,
-                &pics_dir.join(format!("{:0>2}.jpg", i + 1)),
-                &config.concurrent_limit.download,
-            )
-            .await?;
+    // 下载正文图片（重扫评论时本体已存在，跳过重下）
+    if !dyn_model.rescan_reply {
+        let pics_dir = dir.join("pics");
+        for (i, url) in info.pics.iter().enumerate() {
+            downloader
+                .fetch(
+                    url,
+                    &pics_dir.join(format!("{:0>2}.jpg", i + 1)),
+                    &config.concurrent_limit.download,
+                )
+                .await?;
+        }
     }
     // 同步评论：发布 5 天内的动态每轮自动同步，5 天外的仅在被手动标记重扫时同步
     let within_window =
