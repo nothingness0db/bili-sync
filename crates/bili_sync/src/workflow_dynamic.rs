@@ -415,7 +415,7 @@ async fn process_dynamic(
         dyn_model.pub_ts.and_utc() + chrono::Duration::days(REPLY_SYNC_WINDOW_DAYS) >= chrono::Utc::now();
     let need_rescan = dyn_model.rescan_reply;
     if source.sync_reply && (within_window || need_rescan) {
-        sync_dynamic_replies(
+        if let Err(e) = sync_dynamic_replies(
             &dyn_model.id,
             dyn_model.comment_type,
             &dyn_model.comment_oid,
@@ -425,7 +425,24 @@ async fn process_dynamic(
             connection,
             config,
         )
-        .await?;
+        .await
+        {
+            // 动态已被删除（-404）：标记无效，停止重试，不影响本体已存档的数据
+            if let Some(BiliError::ErrorResponse { code: -404, .. }) = e.downcast_ref::<BiliError>() {
+                warn!(
+                    "动态 {} 已不存在（可能被 UP 删除），标记为无效，保留本地档案",
+                    dyn_model.id
+                );
+                let mut model: dynamic::ActiveModel = dyn_model.clone().into();
+                model.valid = Set(false);
+                model.rescan_reply = Set(false);
+                model.download_status = Set(STATUS_COMPLETED);
+                model.save(connection).await?;
+                return Ok(());
+            } else {
+                return Err(e);
+            }
+        }
         info!(
             "动态 {} 评论同步完成{}",
             dyn_model.id,
