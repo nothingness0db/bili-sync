@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex as StdMutex};
 
 use anyhow::{Context, Result, anyhow, bail};
 use bili_sync_entity::{dynamic, dynamic_source, reply, upper_stat};
@@ -15,6 +17,19 @@ use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::utils::dynamic_render::{render_comments_md, render_dynamic_md};
 use crate::utils::status::STATUS_COMPLETED;
+
+/// 每个动态源的同步锁，防止定时任务与手动同步并发
+static SOURCE_LOCKS: LazyLock<StdMutex<HashMap<i32, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+fn get_source_lock(source_id: i32) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    SOURCE_LOCKS
+        .lock()
+        .unwrap()
+        .entry(source_id)
+        .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
 
 /// 顶级评论最大翻页数（每页 20 条）
 const MAX_REPLY_PAGES: usize = 50;
@@ -46,6 +61,15 @@ pub async fn process_dynamic_source(
 ) -> Result<()> {
     // wbi 签名密钥不依赖视频任务的全局状态，动态同步独立初始化
     ensure_mixin_key(bili_client, &config.credential).await?;
+    // 防止同一动态源被并发处理（定时任务 + 立即同步按钮），一轮在跑时本轮跳过
+    let lock = get_source_lock(source.id);
+    let _guard = match lock.try_lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            warn!("动态源「{}」已有同步任务在进行中，本轮跳过", source.upper_name);
+            return Ok(());
+        }
+    };
     fs::create_dir_all(&source.path)
         .await
         .with_context(|| format!("failed to create dynamic source directory {}", source.path))?;
