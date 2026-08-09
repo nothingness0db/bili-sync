@@ -38,6 +38,20 @@
 	let scanningProfile = false;
 	let syncingNow = false;
 	let rescanningIds = new SvelteSet<string>();
+	// 时间范围过滤（天），null = 全部
+	let rangeDays: number | null = null;
+	const RANGE_OPTIONS = [
+		{ label: '全部', days: null },
+		{ label: '90天', days: 90 },
+		{ label: '30天', days: 30 },
+		{ label: '7天', days: 7 }
+	] as const;
+
+	function filteredStats(): StatPoint[] {
+		if (!stats || rangeDays === null) return stats?.stats ?? [];
+		const cutoff = Date.now() - rangeDays * 24 * 3600 * 1000;
+		return stats.stats.filter((p) => new Date(p.recordedAt).getTime() >= cutoff);
+	}
 
 	// 动态详情对话框
 	let showDetailDialog = false;
@@ -78,12 +92,7 @@
 
 	function buildChartData(points: StatPoint[], key: (typeof METRICS)[number]['key']) {
 		return points.map((p) => ({
-			time: new Date(p.recordedAt).toLocaleString('zh-CN', {
-				month: '2-digit',
-				day: '2-digit',
-				hour: '2-digit',
-				minute: '2-digit'
-			}),
+			time: new Date(p.recordedAt),
 			value: p[key]
 		}));
 	}
@@ -245,6 +254,21 @@
 		</div>
 
 		<!-- 数据折线图 -->
+		<div class="flex items-center justify-between">
+			<span class="text-sm font-medium">账号数据趋势</span>
+			<div class="flex items-center gap-1">
+				{#each RANGE_OPTIONS as opt (opt.label)}
+					<Button
+						size="sm"
+						variant={rangeDays === opt.days ? 'default' : 'ghost'}
+						onclick={() => (rangeDays = opt.days)}
+						class="h-7 px-2 text-xs"
+					>
+						{opt.label}
+					</Button>
+				{/each}
+			</div>
+		</div>
 		<div class="grid gap-6 lg:grid-cols-2">
 			{#each METRICS as metric (metric.key)}
 				<div class="rounded-lg border p-4">
@@ -262,7 +286,7 @@
 							class="h-[150px] w-full"
 						>
 							<AreaChart
-								data={buildChartData(stats.stats, metric.key)}
+								data={buildChartData(filteredStats(), metric.key)}
 								x="time"
 								axis="x"
 								series={[
