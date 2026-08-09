@@ -64,6 +64,7 @@ pub struct DynamicListItem {
     pub reply_count: i64,
     pub rescan_reply: bool,
     pub path: String,
+    pub valid: bool,
 }
 
 #[derive(Serialize)]

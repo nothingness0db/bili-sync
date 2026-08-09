@@ -208,6 +208,7 @@ pub async fn get_dynamic_source_dynamics(
             reply_count: reply_counts.get(&d.id).copied().unwrap_or(0),
             rescan_reply: d.rescan_reply,
             path: d.path,
+            valid: d.valid,
         });
     }
     Ok(ApiResponse::ok(items))

@@ -407,8 +407,12 @@
 											{dyn.commentCount}
 										</Badge>
 									</Table.Cell>
-									<Table.Cell>
-										{#if dyn.rescanReply}
+								<Table.Cell>
+									{#if !dyn.valid}
+										<Badge variant="secondary" class="flex w-fit items-center gap-1.5">
+											已删除（本地保留）
+										</Badge>
+									{:else if dyn.rescanReply}
 											<Badge class="flex w-fit items-center gap-1.5 bg-amber-600 text-amber-50">
 												<RefreshCwIcon class="h-3 w-3" />
 												等待重扫

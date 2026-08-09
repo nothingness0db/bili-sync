@@ -296,6 +296,7 @@ export interface DynamicListItem {
 	replyCount: number;
 	rescanReply: boolean;
 	path: string;
+	valid: boolean;
 }
 
 export interface ReplyItem {
