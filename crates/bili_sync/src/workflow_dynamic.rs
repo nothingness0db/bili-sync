@@ -4,7 +4,7 @@ use std::sync::{LazyLock, Mutex as StdMutex};
 
 use anyhow::{Context, Result, anyhow, bail};
 use bili_sync_entity::{dynamic, dynamic_source, reply, upper_stat};
-use futures::StreamExt;
+use futures::{StreamExt, stream};
 use sea_orm::ActiveValue::Set;
 use sea_orm::QueryOrder;
 use sea_orm::entity::prelude::*;
@@ -91,6 +91,8 @@ pub async fn process_dynamic_source(
 async fn backfill_missing_replies(source: &dynamic_source::Model, connection: &DatabaseConnection) -> Result<()> {
     /// 每轮最多检查的已完成动态数
     const BACKFILL_CHECK_LIMIT: u64 = 50;
+    /// 每轮最多标记的待重扫动态数（与每轮处理上限对齐，避免积压无限膨胀）
+    const MAX_BACKFILL_MARK_PER_ROUND: usize = 5;
     let mut candidates = dynamic::Entity::find()
         .filter(dynamic::Column::SourceId.eq(source.id))
         .filter(dynamic::Column::Valid.eq(true))
@@ -102,6 +104,9 @@ async fn backfill_missing_replies(source: &dynamic_source::Model, connection: &D
     candidates.truncate(BACKFILL_CHECK_LIMIT as usize);
     let mut marked = 0;
     for dyn_model in candidates {
+        if marked >= MAX_BACKFILL_MARK_PER_ROUND {
+            break;
+        }
         // API 评论数（来自动态抓取时的 stat 快照）
         let api_count = dyn_model
             .stat
@@ -316,7 +321,7 @@ async fn process_unhandled_dynamics(
     config: &Config,
 ) -> Result<()> {
     /// 每轮最多处理的重扫评论动态数
-    const MAX_RESCAN_PER_ROUND: usize = 10;
+    const MAX_RESCAN_PER_ROUND: usize = 5;
     /// 每轮最多处理的新动态数
     const MAX_NEW_PER_ROUND: usize = 20;
     let dynamics = dynamic::Entity::find()
@@ -490,28 +495,28 @@ async fn sync_dynamic_replies(
     )
     .await?;
     fs::write(comments_dir.join("comments.md"), render_comments_md(&replies)).await?;
-    // 下载评论图片
-    for reply in &replies {
-        for (i, url) in reply.images.iter().enumerate() {
-            downloader
-                .fetch(
-                    url,
-                    &comments_dir.join(format!("{}_{}.jpg", reply.rpid, i + 1)),
-                    &config.concurrent_limit.download,
-                )
-                .await?;
-        }
-        for sub in &reply.sub_replies {
-            for (i, url) in sub.images.iter().enumerate() {
-                downloader
-                    .fetch(
-                        url,
-                        &comments_dir.join(format!("{}_{}.jpg", sub.rpid, i + 1)),
-                        &config.concurrent_limit.download,
-                    )
-                    .await?;
+    // 下载评论图片（并发，图片走 CDN 不占主站风控额度，并发数复用分块下载配置）
+    let image_tasks = replies
+        .iter()
+        .flat_map(|reply| {
+            let mut tasks = Vec::new();
+            for (i, url) in reply.images.iter().enumerate() {
+                tasks.push((url.clone(), comments_dir.join(format!("{}_{}.jpg", reply.rpid, i + 1))));
             }
-        }
+            for sub in &reply.sub_replies {
+                for (i, url) in sub.images.iter().enumerate() {
+                    tasks.push((url.clone(), comments_dir.join(format!("{}_{}.jpg", sub.rpid, i + 1))));
+                }
+            }
+            tasks
+        })
+        .collect::<Vec<_>>();
+    let concurrency = config.concurrent_limit.download.concurrency.max(1);
+    let mut image_stream = stream::iter(image_tasks)
+        .map(|(url, path)| async move { downloader.fetch(&url, &path, &config.concurrent_limit.download).await })
+        .buffer_unordered(concurrency);
+    while let Some(res) = image_stream.next().await {
+        res?;
     }
     Ok(())
 }
