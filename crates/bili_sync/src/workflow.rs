@@ -10,6 +10,7 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use sea_orm::ActiveValue::Set;
 use sea_orm::TransactionTrait;
 use sea_orm::entity::prelude::*;
+use sea_orm::sea_query::Expr;
 use tokio::fs;
 
 use crate::adapter::{VideoSource, VideoSourceEnum};
@@ -51,6 +52,10 @@ pub async fn process_video_source(
         .await?;
     // 从视频流中获取新视频的简要信息，写入数据库
     refresh_video_source(&video_source, video_streams, connection).await?;
+    // 拉取该源当前全部视频列表，将本地已下载但已被删除的视频标记为失效（不影响本地文件）
+    if let Err(e) = detect_deleted_videos(&video_source, bili_client, &config.credential, connection).await {
+        warn!("检测{}已删除视频失败：{:#}", video_source.display_name(), e);
+    }
     // 单独请求视频详情接口，获取视频的详情信息与所有的分页，写入数据库
     fetch_video_details(bili_client, &video_source, connection, config).await?;
     if ARGS.scan_only {
@@ -119,6 +124,46 @@ pub async fn refresh_video_source<'a>(
             .await?;
     }
     video_source.log_refresh_video_end(count);
+    Ok(())
+}
+
+/// 拉取视频源当前全部视频列表，将本地已有但已从 B 站消失（疑似被删除）的视频标记为失效
+///
+/// 仅标记数据库状态（valid = false），不影响已下载的本地文件；
+/// 拉取列表失败时跳过检测，避免因接口异常误标。
+async fn detect_deleted_videos(
+    video_source: &VideoSourceEnum,
+    bili_client: &BiliClient,
+    credential: &crate::bilibili::Credential,
+    connection: &DatabaseConnection,
+) -> Result<()> {
+    let current_bvids = video_source.collect_current_bvids(bili_client, credential).await?;
+    let videos = video::Entity::find()
+        .filter(video_source.filter_expr())
+        .filter(video::Column::Valid.eq(true))
+        .all(connection)
+        .await?;
+    let deleted_ids = videos
+        .iter()
+        .filter(|video_model| !current_bvids.contains(&video_model.bvid))
+        .map(|video_model| {
+            info!(
+                "「{}」视频「{}」（{}）已从 B 站消失，疑似被 UP 删除，标记为已删除",
+                video_source.display_name(),
+                video_model.name,
+                video_model.bvid
+            );
+            video_model.id
+        })
+        .collect::<Vec<_>>();
+    if deleted_ids.is_empty() {
+        return Ok(());
+    }
+    video::Entity::update_many()
+        .filter(video::Column::Id.is_in(deleted_ids))
+        .col_expr(video::Column::Valid, Expr::value(false))
+        .exec(connection)
+        .await?;
     Ok(())
 }
 

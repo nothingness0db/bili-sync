@@ -1,10 +1,11 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::pin::Pin;
 
 use anyhow::{Result, ensure};
 use bili_sync_entity::rule::Rule;
 use bili_sync_entity::*;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::SimpleExpr;
@@ -117,6 +118,23 @@ impl VideoSource for submission::Model {
             Box::pin(submission.into_video_stream())
         };
         Ok((updated_model.into(), video_stream))
+    }
+
+    async fn collect_current_bvids(
+        &self,
+        bili_client: &BiliClient,
+        credential: &Credential,
+    ) -> Result<HashSet<String>> {
+        let submission = Submission::new(bili_client, self.upper_id.to_string(), credential);
+        let mut bvids = HashSet::new();
+        let mut stream = Box::pin(submission.into_video_stream());
+        while let Some(res) = stream.next().await {
+            let VideoInfo::Submission { bvid, .. } = res? else {
+                unreachable!("submission stream should only yield Submission variant")
+            };
+            bvids.insert(bvid);
+        }
+        Ok(bvids)
     }
 
     async fn delete_from_db(self, conn: &impl ConnectionTrait) -> Result<()> {

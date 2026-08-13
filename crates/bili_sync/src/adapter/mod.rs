@@ -4,10 +4,11 @@ mod submission;
 mod watch_later;
 
 use std::borrow::Cow;
+use std::collections::HashSet;
 use std::path::Path;
 use std::pin::Pin;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use enum_dispatch::enum_dispatch;
 use futures::Stream;
@@ -112,6 +113,16 @@ pub trait VideoSource {
         VideoSourceEnum,
         Pin<Box<dyn Stream<Item = Result<VideoInfo>> + Send + 'a>>,
     )>;
+
+    /// 拉取该视频源当前在 B 站存在的全部视频 bvid 集合，用于检测已被删除的视频
+    /// 默认不支持，由各视频源实现
+    async fn collect_current_bvids(
+        &self,
+        _bili_client: &BiliClient,
+        _credential: &Credential,
+    ) -> Result<HashSet<String>> {
+        bail!("该视频源暂不支持已删除视频检测")
+    }
 
     async fn create_dir_all(&self) -> Result<()> {
         let video_source_path = self.path();
