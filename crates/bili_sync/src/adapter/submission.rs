@@ -133,6 +133,8 @@ impl VideoSource for submission::Model {
                 unreachable!("submission stream should only yield Submission variant")
             };
             bvids.insert(bvid);
+            // 投稿列表接口为风控敏感接口，全量拉取时每页保持低频
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
         }
         Ok(bvids)
     }

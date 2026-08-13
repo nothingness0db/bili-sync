@@ -21,9 +21,7 @@ use crate::api::response::{
 use crate::api::wrapper::{ApiError, ApiResponse};
 use crate::bilibili::BiliClient;
 use crate::config::VersionedConfig;
-use crate::workflow_dynamic::{
-    ensure_mixin_key, process_dynamic_source_queued, update_upper_stat,
-};
+use crate::workflow_dynamic::{ensure_mixin_key, process_dynamic_source_queued, update_upper_stat};
 
 pub(super) fn router() -> Router {
     Router::new()

@@ -181,6 +181,8 @@ pub struct VideoInfo {
     pub name: String,
     pub upper_name: String,
     pub valid: bool,
+    /// 被标记为已删除的时间，null 表示未被标记
+    pub deleted_at: Option<DateTime>,
     pub should_download: bool,
     #[serde(serialize_with = "serde_video_download_status")]
     pub download_status: u32,

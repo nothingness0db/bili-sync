@@ -30,6 +30,8 @@ pub struct Model {
     pub favtime: DateTime,
     pub download_status: u32,
     pub valid: bool,
+    /// 被标记为已删除的时间（UP 删除视频），null 表示未被标记
+    pub deleted_at: Option<DateTime>,
     pub should_download: bool,
     pub tags: Option<StringVec>,
     pub single_page: Option<bool>,

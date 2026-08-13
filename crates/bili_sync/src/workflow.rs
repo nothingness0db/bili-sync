@@ -185,9 +185,11 @@ pub async fn detect_deleted_videos(
     if confirmed_deleted_ids.is_empty() {
         return Ok(0);
     }
+    // 标记删除并记录删除时间（历史快照迁移用 deleted_at 保存当时的删除时刻）
     video::Entity::update_many()
         .filter(video::Column::Id.is_in(confirmed_deleted_ids))
         .col_expr(video::Column::Valid, Expr::value(false))
+        .col_expr(video::Column::DeletedAt, Expr::value(chrono::Utc::now().naive_utc()))
         .exec(connection)
         .await?;
     Ok(deleted_count)

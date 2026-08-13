@@ -33,6 +33,7 @@ export interface VideoInfo {
 	name: string;
 	upper_name: string;
 	valid: boolean;
+	deleted_at?: string | null;
 	should_download: boolean;
 	download_status: [number, number, number, number, number];
 	collection_id?: number;

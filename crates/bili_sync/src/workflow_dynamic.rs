@@ -12,7 +12,10 @@ use sea_orm::sea_query::{Condition, OnConflict};
 use serde_json::Value;
 use tokio::fs;
 
-use crate::bilibili::{BiliClient, BiliError, DynamicFeed, DynamicInfo, MIXIN_KEY, Reply, ReplyInfo, UpperInfo};
+use crate::bilibili::{
+    BiliClient, BiliError, DynamicFeed, DynamicInfo, MIXIN_KEY, Reply, ReplyInfo, Submission, UpperInfo, Video,
+    VideoInfo,
+};
 use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::utils::dynamic_render::{render_comments_md, render_dynamic_md};
@@ -163,6 +166,74 @@ async fn backfill_missing_replies(source: &dynamic_source::Model, connection: &D
     Ok(())
 }
 
+/// 统计该动态源的「仅动态视频」数量：
+/// 1. 从本地动态中收集 AV 动态对应的 bvid 集合
+/// 2. 拉取当前投稿列表（arc/search 全量）得到投稿 bvid 集合
+/// 3. 差集中的视频逐个请求详情接口确认：视频仍存在则为「仅动态视频」，-404 为已删除投稿
+async fn collect_dynamic_video_count(
+    source: &dynamic_source::Model,
+    bili_client: &BiliClient,
+    connection: &DatabaseConnection,
+    config: &Config,
+) -> Result<i64> {
+    let mut dynamic_bvids = std::collections::HashSet::new();
+    let dynamics = dynamic::Entity::find()
+        .filter(dynamic::Column::SourceId.eq(source.id))
+        .filter(dynamic::Column::DynType.eq("DYNAMIC_TYPE_AV"))
+        .all(connection)
+        .await
+        .context("collect av dynamics failed")?;
+    for dyn_model in dynamics {
+        if let Some(raw) = &dyn_model.raw
+            && let Ok(value) = serde_json::from_str::<serde_json::Value>(raw)
+            && let Some(bvid) = value
+                .get("modules")
+                .and_then(|m| m.get("module_dynamic"))
+                .and_then(|m| m.get("major"))
+                .and_then(|m| m.get("archive"))
+                .and_then(|a| a.get("bvid"))
+                .and_then(|b| b.as_str())
+        {
+            dynamic_bvids.insert(bvid.to_string());
+        }
+    }
+    if dynamic_bvids.is_empty() {
+        return Ok(0);
+    }
+    // 拉取当前投稿列表（arc/search 全量），每页保持低频避免触发风控
+    let submission = Submission::new(bili_client, source.upper_id.to_string(), &config.credential);
+    let mut current_bvids = std::collections::HashSet::new();
+    let mut stream = Box::pin(submission.into_video_stream());
+    while let Some(res) = stream.next().await {
+        let VideoInfo::Submission { bvid, .. } = res? else {
+            unreachable!("submission stream should only yield Submission variant")
+        };
+        current_bvids.insert(bvid);
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    }
+    // 差集逐个确认
+    let mut count = 0i64;
+    for bvid in dynamic_bvids.difference(&current_bvids) {
+        let video = Video::new(bili_client, bvid.as_str(), &config.credential);
+        match video.get_view_info().await {
+            Ok(_) => count += 1,
+            Err(e)
+                if matches!(
+                    e.downcast_ref::<BiliError>(),
+                    Some(BiliError::ErrorResponse { code: -404, .. })
+                ) =>
+            {
+                // 已删除投稿，不算动态视频
+            }
+            Err(e) => {
+                warn!("确认视频 {} 状态失败，跳过：{:#}", bvid, e);
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    }
+    Ok(count)
+}
+
 /// 拉取 UP 主账号信息并写入快照表，与最近一条快照对比，有变化才插入
 pub async fn update_upper_stat(
     source: &dynamic_source::Model,
@@ -189,12 +260,27 @@ pub async fn update_upper_stat(
         .order_by_desc(upper_stat::Column::RecordedAt)
         .one(connection)
         .await?;
-    // 动态中的视频数量（已同步的视频动态数，与投稿数相加即为总视频数）
-    let dynamic_video_count = dynamic::Entity::find()
+    // 图文投稿数（B 站投稿 tab 中图文投稿会自动生成 DRAW 动态，投稿总数 = 视频投稿 + 图文投稿）
+    let draw_count = dynamic::Entity::find()
         .filter(dynamic::Column::SourceId.eq(source.id))
-        .filter(dynamic::Column::DynType.eq("DYNAMIC_TYPE_AV"))
+        .filter(dynamic::Column::DynType.eq("DYNAMIC_TYPE_DRAW"))
         .count(connection)
         .await? as i64;
+    // 动态视频数：动态里的视频（AV 动态）中不属于当前投稿列表的部分（仅动态视频）
+    // 需要拉取当前投稿列表对比 + 对差集做详情接口确认（-404 为已删除投稿，不算）
+    let dynamic_video_count = match collect_dynamic_video_count(source, bili_client, connection, config).await {
+        Ok(count) => count,
+        Err(e) => {
+            if let Some(inner) = e.downcast_ref::<BiliError>()
+                && inner.is_risk_control_related()
+            {
+                return Err(e);
+            }
+            warn!("统计「{}」动态视频数失败：{:#}", source.upper_name, e);
+            0
+        }
+    };
+    let video_count = profile.video_count + draw_count;
     let changed = match latest {
         Some(s) => {
             s.name != profile.name
@@ -202,7 +288,7 @@ pub async fn update_upper_stat(
                 || s.face != profile.face
                 || s.fan_count != profile.fan_count
                 || s.follow_count != profile.follow_count
-                || s.video_count != profile.video_count
+                || s.video_count != video_count
                 || s.dynamic_video_count != dynamic_video_count
                 || s.view_count != profile.view_count
                 || s.like_count != profile.like_count
@@ -217,7 +303,7 @@ pub async fn update_upper_stat(
             face: Set(profile.face.clone()),
             fan_count: Set(profile.fan_count),
             follow_count: Set(profile.follow_count),
-            video_count: Set(profile.video_count),
+            video_count: Set(video_count),
             dynamic_video_count: Set(dynamic_video_count),
             view_count: Set(profile.view_count),
             like_count: Set(profile.like_count),
@@ -227,11 +313,13 @@ pub async fn update_upper_stat(
         .exec(connection)
         .await?;
         info!(
-            "「{}」账号信息更新：粉丝 {} 关注 {} 投稿 {} 动态视频 {} 播放 {} 获赞 {}",
+            "「{}」账号信息更新：粉丝 {} 关注 {} 投稿 {}（视频 {} + 图文 {}）动态视频 {} 播放 {} 获赞 {}",
             source.upper_name,
             profile.fan_count,
             profile.follow_count,
+            video_count,
             profile.video_count,
+            draw_count,
             dynamic_video_count,
             profile.view_count,
             profile.like_count
@@ -242,7 +330,7 @@ pub async fn update_upper_stat(
             source.upper_name,
             profile.fan_count,
             profile.follow_count,
-            profile.video_count,
+            video_count,
             dynamic_video_count,
             profile.view_count,
             profile.like_count

@@ -16,6 +16,8 @@ mod m20260808_000001_dynamic_sync;
 mod m20260808_000002_upper_stat;
 mod m20260808_000003_add_like_count;
 mod m20260813_000004_add_dynamic_video_count;
+mod m20260813_000005_add_total_video_count;
+mod m20260813_000006_add_video_deleted_at;
 
 pub struct Migrator;
 
@@ -39,6 +41,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260808_000002_upper_stat::Migration),
             Box::new(m20260808_000003_add_like_count::Migration),
             Box::new(m20260813_000004_add_dynamic_video_count::Migration),
+            Box::new(m20260813_000005_add_total_video_count::Migration),
+            Box::new(m20260813_000006_add_video_deleted_at::Migration),
         ]
     }
 }

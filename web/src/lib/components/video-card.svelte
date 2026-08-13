@@ -15,6 +15,7 @@
 	import InfoIcon from '@lucide/svelte/icons/info';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SquareArrowOutUpRightIcon from '@lucide/svelte/icons/square-arrow-out-up-right';
+	import TrashIcon from '@lucide/svelte/icons/trash';
 	import UserIcon from '@lucide/svelte/icons/user';
 	import { goto } from '$app/navigation';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
@@ -127,6 +128,7 @@
 	// 根据模式确定显示的标题和副标题
 	$: displayTitle = customTitle || video.name;
 	$: displaySubtitle = customSubtitle || video.upper_name;
+	$: deletedAtText = video.deleted_at ? new Date(video.deleted_at).toLocaleString() : null;
 	$: cardClasses =
 		mode === 'default'
 			? 'group flex h-full min-w-0 flex-col transition-all hover:shadow-lg hover:shadow-primary/5 border-border/50'
@@ -151,6 +153,12 @@
 				{overallStatus.text}
 			</Badge>
 		</div>
+		{#if !video.valid && deletedAtText}
+			<div class="text-destructive mt-1.5 flex items-center gap-1 text-xs">
+				<TrashIcon class="h-3 w-3 shrink-0" />
+				<span class="min-w-0 truncate" title={deletedAtText}>已删除于 {deletedAtText}</span>
+			</div>
+		{/if}
 		{#if displaySubtitle}
 			<div class="text-muted-foreground mt-1.5 flex min-w-0 items-center gap-1 text-sm">
 				<UserIcon class="h-3.5 w-3.5 shrink-0" />

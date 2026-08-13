@@ -255,6 +255,7 @@ pub async fn clear_and_reset_video_status(
             name: video_info.name,
             upper_name: video_info.upper_name,
             valid: video_info.valid,
+            deleted_at: video_info.deleted_at,
             should_download: video_info.should_download,
             download_status: video_info.download_status,
             collection_id: video_info.collection_id,
