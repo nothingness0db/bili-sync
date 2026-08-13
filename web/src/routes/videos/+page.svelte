@@ -64,8 +64,10 @@
 	let selectedSubmissionIds: SvelteSet<number> = new SvelteSet();
 
 	function handleScanDeleted() {
-		const submissions = videoSources?.submission ?? [];
-		selectedSubmissionIds = new SvelteSet(submissions.map((s) => s.id));
+		selectedSubmissionIds.clear();
+		for (const s of videoSources?.submission ?? []) {
+			selectedSubmissionIds.add(s.id);
+		}
 		scanDeletedDialogOpen = true;
 	}
 
@@ -612,15 +614,15 @@
 			<div class="flex items-center space-x-2">
 				<Checkbox
 					id="select-all-submissions"
-					checked={selectedSubmissionIds.size > 0 &&
-						selectedSubmissionIds.size === (videoSources?.submission.length ?? 0)}
-					onclick={() => {
-						if (selectedSubmissionIds.size === (videoSources?.submission.length ?? 0)) {
-							selectedSubmissionIds = new SvelteSet();
+					checked={selectedSubmissionIds.size === (videoSources?.submission.length ?? 0) &&
+						selectedSubmissionIds.size > 0}
+					onCheckedChange={(checked) => {
+						if (checked) {
+							for (const s of videoSources?.submission ?? []) {
+								selectedSubmissionIds.add(s.id);
+							}
 						} else {
-							selectedSubmissionIds = new SvelteSet(
-								(videoSources?.submission ?? []).map((s) => s.id)
-							);
+							selectedSubmissionIds.clear();
 						}
 					}}
 				/>
@@ -632,14 +634,12 @@
 						<Checkbox
 							id={`submission-${source.id}`}
 							checked={selectedSubmissionIds.has(source.id)}
-							onclick={() => {
-								const next = new SvelteSet(selectedSubmissionIds);
-								if (next.has(source.id)) {
-									next.delete(source.id);
+							onCheckedChange={(checked) => {
+								if (checked) {
+									selectedSubmissionIds.add(source.id);
 								} else {
-									next.add(source.id);
+									selectedSubmissionIds.delete(source.id);
 								}
-								selectedSubmissionIds = next;
 							}}
 						/>
 						<Label for={`submission-${source.id}`} class="text-sm">{source.name}</Label>
