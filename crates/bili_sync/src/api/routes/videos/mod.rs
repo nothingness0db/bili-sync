@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::{Context, Result};
 use axum::extract::{Extension, Path, Query};
@@ -27,8 +27,12 @@ use crate::api::response::{
 use crate::api::wrapper::{ApiError, ApiResponse, ValidatedJson};
 use crate::bilibili::BiliClient;
 use crate::config::VersionedConfig;
+use crate::task::DownloadTaskManager;
 use crate::utils::status::{PageStatus, VideoStatus};
 use crate::workflow::detect_deleted_videos;
+
+/// 防连点：同一时刻只允许一个手动删除检测任务
+static SCAN_DEAD_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -119,6 +123,12 @@ pub async fn scan_deleted_videos(
     Extension(bili_client): Extension<Arc<BiliClient>>,
     Json(request): Json<ScanDeletedVideosRequest>,
 ) -> Result<ApiResponse<ScanDeletedVideosResponse>, ApiError> {
+    // 防连点：已有检测在跑（含排队等待中）时直接拒绝
+    let _dedup_guard = SCAN_DEAD_LOCK
+        .try_lock()
+        .map_err(|_| InnerApiError::BadRequest("已有删除检测任务在进行中，请等待完成后再试".to_string()))?;
+    // 排队：等待当前视频任务（含动态处理）结束后再执行，不与周期任务抢 API 额度
+    let _task_guard = DownloadTaskManager::get().wait_and_acquire().await;
     let config = VersionedConfig::get().read();
     let sources = match &request.submission_ids {
         Some(ids) if !ids.is_empty() => {

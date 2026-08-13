@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use sea_orm::DatabaseConnection;
 use serde::Serialize;
-use tokio::sync::{OnceCell, watch};
+use tokio::sync::{OnceCell, OwnedMutexGuard, watch};
 use tokio_cron_scheduler::{Job, JobScheduler};
 
 use crate::adapter::VideoSource;
@@ -41,7 +41,7 @@ pub struct TaskStatus {
 struct TaskContext {
     connection: DatabaseConnection,
     bili_client: Arc<BiliClient>,
-    running: tokio::sync::Mutex<()>,
+    running: Arc<tokio::sync::Mutex<()>>,
     status_tx: watch::Sender<TaskStatus>,
     status_rx: watch::Receiver<TaskStatus>,
     video_task_id: tokio::sync::Mutex<Option<uuid::Uuid>>, // 存储当前视频下载任务的 UUID
@@ -82,6 +82,12 @@ impl DownloadTaskManager {
         Ok(())
     }
 
+    /// 手动任务专用：等待当前视频任务结束后获取互斥执行权（排队语义，不跳过）
+    /// 持有返回的 guard 期间周期任务会被跳过，手动任务执行完毕后自动释放
+    pub async fn wait_and_acquire(&self) -> OwnedMutexGuard<()> {
+        self.cx.running.clone().lock_owned().await
+    }
+
     /// 启动任务调度器
     async fn start(&self) -> Result<()> {
         self.sched.lock().await.start().await?;
@@ -98,7 +104,7 @@ impl DownloadTaskManager {
     async fn new(connection: DatabaseConnection, bili_client: Arc<BiliClient>) -> Result<Self> {
         let sched = Arc::new(tokio::sync::Mutex::new(JobScheduler::new().await?));
         let (status_tx, status_rx) = watch::channel(TaskStatus::default());
-        let (running, video_task_id) = (tokio::sync::Mutex::new(()), tokio::sync::Mutex::new(None));
+        let (running, video_task_id) = (Arc::new(tokio::sync::Mutex::new(())), tokio::sync::Mutex::new(None));
         let cx = Arc::new(TaskContext {
             connection,
             bili_client,

@@ -53,6 +53,7 @@ pub async fn ensure_mixin_key(bili_client: &BiliClient, credential: &crate::bili
 }
 
 /// 完整地处理某个动态源：刷新动态列表、下载图片、同步评论并导出
+/// 定时任务使用：源正在被处理时本轮跳过
 pub async fn process_dynamic_source(
     source: dynamic_source::Model,
     bili_client: &BiliClient,
@@ -70,6 +71,29 @@ pub async fn process_dynamic_source(
             return Ok(());
         }
     };
+    process_dynamic_source_inner(source, bili_client, connection, config).await
+}
+
+/// 完整地处理某个动态源，手动触发专用：等待该源正在进行的同步结束后再执行（排队语义）
+pub async fn process_dynamic_source_queued(
+    source: dynamic_source::Model,
+    bili_client: &BiliClient,
+    connection: &DatabaseConnection,
+    config: &Config,
+) -> Result<()> {
+    ensure_mixin_key(bili_client, &config.credential).await?;
+    // 手动触发排队：等待该源当前任务结束，不跳过
+    let lock = get_source_lock(source.id);
+    let _guard = lock.lock().await;
+    process_dynamic_source_inner(source, bili_client, connection, config).await
+}
+
+async fn process_dynamic_source_inner(
+    source: dynamic_source::Model,
+    bili_client: &BiliClient,
+    connection: &DatabaseConnection,
+    config: &Config,
+) -> Result<()> {
     fs::create_dir_all(&source.path)
         .await
         .with_context(|| format!("failed to create dynamic source directory {}", source.path))?;
@@ -364,8 +388,16 @@ async fn process_unhandled_dynamics(
     );
     let downloader = Downloader::new(bili_client.client.clone());
     let reply_api = Reply::new(bili_client, &config.credential);
-    for dyn_model in dynamics {
+    let total = dynamics.len();
+    for (idx, dyn_model) in dynamics.into_iter().enumerate() {
         let dyn_id = dyn_model.id.clone();
+        info!(
+            "开始处理「{}」第 {}/{} 条动态 {}..",
+            source.upper_name,
+            idx + 1,
+            total,
+            dyn_id
+        );
         if let Err(e) = process_dynamic(source, dyn_model, &downloader, &reply_api, connection, config).await {
             error!("处理动态 {dyn_id} 失败：{:#}", e);
             if let Ok(e) = e.downcast::<BiliError>()
@@ -430,6 +462,15 @@ async fn process_dynamic(
         dyn_model.pub_ts.and_utc() + chrono::Duration::days(REPLY_SYNC_WINDOW_DAYS) >= chrono::Utc::now();
     let need_rescan = dyn_model.rescan_reply;
     if source.sync_reply && (within_window || need_rescan) {
+        info!(
+            "动态 {} 本体已处理，评论待扫描{}，开始同步评论..",
+            dyn_model.id,
+            if need_rescan {
+                "（重扫）"
+            } else {
+                "（5 天窗口内）"
+            }
+        );
         if let Err(e) = sync_dynamic_replies(
             &dyn_model.id,
             dyn_model.comment_type,

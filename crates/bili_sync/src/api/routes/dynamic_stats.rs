@@ -21,7 +21,9 @@ use crate::api::response::{
 use crate::api::wrapper::{ApiError, ApiResponse};
 use crate::bilibili::BiliClient;
 use crate::config::VersionedConfig;
-use crate::workflow_dynamic::{ensure_mixin_key, process_dynamic_source, update_upper_stat};
+use crate::workflow_dynamic::{
+    ensure_mixin_key, process_dynamic_source_queued, update_upper_stat,
+};
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -302,7 +304,8 @@ pub async fn sync_now(
     let connection = db.clone();
     tokio::spawn(async move {
         let config = VersionedConfig::get().snapshot();
-        match process_dynamic_source(source, &bili_client, &connection, &config).await {
+        // 排队执行：等待该源正在进行的同步结束后再跑，不跳过
+        match process_dynamic_source_queued(source, &bili_client, &connection, &config).await {
             Ok(()) => info!("手动触发的动态同步完成"),
             Err(e) => error!("手动触发的动态同步失败：{:#}", e),
         }
