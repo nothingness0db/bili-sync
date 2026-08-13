@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::extract::{Extension, Path, Query};
@@ -11,24 +12,29 @@ use sea_orm::{
     QueryOrder, TransactionTrait, TryIntoModel,
 };
 
+use crate::adapter::{VideoSource as _, VideoSourceEnum};
 use crate::api::error::InnerApiError;
 use crate::api::helper::{update_page_download_status, update_video_download_status};
 use crate::api::request::{
-    ResetFilteredVideoStatusRequest, ResetVideoStatusRequest, UpdateFilteredVideoStatusRequest,
-    UpdateVideoStatusRequest, VideosRequest,
+    ResetFilteredVideoStatusRequest, ResetVideoStatusRequest, ScanDeletedVideosRequest,
+    UpdateFilteredVideoStatusRequest, UpdateVideoStatusRequest, VideosRequest,
 };
 use crate::api::response::{
-    ClearAndResetVideoStatusResponse, PageInfo, ResetFilteredVideosResponse, ResetVideoResponse, SimplePageInfo,
-    SimpleVideoInfo, UpdateFilteredVideoStatusResponse, UpdateVideoStatusResponse, VideoInfo, VideoResponse,
-    VideosResponse,
+    ClearAndResetVideoStatusResponse, PageInfo, ResetFilteredVideosResponse, ResetVideoResponse,
+    ScanDeletedVideosResponse, SimplePageInfo, SimpleVideoInfo, UpdateFilteredVideoStatusResponse,
+    UpdateVideoStatusResponse, VideoInfo, VideoResponse, VideosResponse,
 };
 use crate::api::wrapper::{ApiError, ApiResponse, ValidatedJson};
+use crate::bilibili::BiliClient;
+use crate::config::VersionedConfig;
 use crate::utils::status::{PageStatus, VideoStatus};
+use crate::workflow::detect_deleted_videos;
 
 pub(super) fn router() -> Router {
     Router::new()
         .route("/videos", get(get_videos))
         .route("/videos/{id}", get(get_video))
+        .route("/videos/scan-deleted", post(scan_deleted_videos))
         .route(
             "/videos/{id}/clear-and-reset-status",
             post(clear_and_reset_video_status),
@@ -103,6 +109,43 @@ pub async fn get_video(
     Ok(ApiResponse::ok(VideoResponse {
         video: video_info,
         pages: pages_info,
+    }))
+}
+
+/// 手动触发「检查已删除视频」：拉取指定投稿源（为空则全部）的当前视频列表，
+/// 将本地已有但已从 B 站消失的视频标记为失效，不影响本地文件
+pub async fn scan_deleted_videos(
+    Extension(db): Extension<DatabaseConnection>,
+    Extension(bili_client): Extension<Arc<BiliClient>>,
+    Json(request): Json<ScanDeletedVideosRequest>,
+) -> Result<ApiResponse<ScanDeletedVideosResponse>, ApiError> {
+    let config = VersionedConfig::get().read();
+    let sources = match &request.submission_ids {
+        Some(ids) if !ids.is_empty() => {
+            submission::Entity::find()
+                .filter(submission::Column::Id.is_in(ids.clone()))
+                .all(&db)
+                .await?
+        }
+        _ => submission::Entity::find().all(&db).await?,
+    };
+    let mut scanned_sources = 0;
+    let mut deleted_count = 0;
+    for source in sources {
+        let video_source: VideoSourceEnum = source.into();
+        match detect_deleted_videos(&video_source, &bili_client, &config.credential, &db).await {
+            Ok(count) => {
+                scanned_sources += 1;
+                deleted_count += count;
+            }
+            Err(e) => {
+                warn!("检查「{}」已删除视频失败：{:#}", video_source.display_name(), e);
+            }
+        }
+    }
+    Ok(ApiResponse::ok(ScanDeletedVideosResponse {
+        scanned_sources,
+        deleted_count,
     }))
 }
 

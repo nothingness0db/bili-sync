@@ -225,6 +225,10 @@ class ApiClient {
 		return this.post<ResetVideoResponse>(`/videos/${id}/reset-status`, request);
 	}
 
+	async scanDeletedVideos(submissionIds: number[]): Promise<ApiResponse<ScanDeletedVideosResponse>> {
+		return this.post<ScanDeletedVideosResponse>('/videos/scan-deleted', { submission_ids: submissionIds });
+	}
+
 	async clearAndResetVideoStatus(id: number): Promise<ApiResponse<ClearAndResetVideoResponse>> {
 		return this.post<ClearAndResetVideoResponse>(`/videos/${id}/clear-and-reset-status`);
 	}
@@ -382,6 +386,7 @@ const api = {
 	getVideo: (id: number) => apiClient.getVideo(id),
 	resetVideoStatus: (id: number, request: ResetVideoStatusRequest) =>
 		apiClient.resetVideoStatus(id, request),
+	scanDeletedVideos: (submissionIds: number[]) => apiClient.scanDeletedVideos(submissionIds),
 	clearAndResetVideoStatus: (id: number) => apiClient.clearAndResetVideoStatus(id),
 	resetFilteredVideoStatus: (request: ResetFilteredVideoStatusRequest) =>
 		apiClient.resetFilteredVideoStatus(request),

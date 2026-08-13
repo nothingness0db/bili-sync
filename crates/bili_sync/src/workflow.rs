@@ -52,10 +52,6 @@ pub async fn process_video_source(
         .await?;
     // 从视频流中获取新视频的简要信息，写入数据库
     refresh_video_source(&video_source, video_streams, connection).await?;
-    // 拉取该源当前全部视频列表，将本地已下载但已被删除的视频标记为失效（不影响本地文件）
-    if let Err(e) = detect_deleted_videos(&video_source, bili_client, &config.credential, connection).await {
-        warn!("检测{}已删除视频失败：{:#}", video_source.display_name(), e);
-    }
     // 单独请求视频详情接口，获取视频的详情信息与所有的分页，写入数据库
     fetch_video_details(bili_client, &video_source, connection, config).await?;
     if ARGS.scan_only {
@@ -127,44 +123,74 @@ pub async fn refresh_video_source<'a>(
     Ok(())
 }
 
-/// 拉取视频源当前全部视频列表，将本地已有但已从 B 站消失（疑似被删除）的视频标记为失效
+/// 拉取视频源当前全部投稿列表，将本地已有且已确认从 B 站消失的视频标记为失效
 ///
 /// 仅标记数据库状态（valid = false），不影响已下载的本地文件；
-/// 拉取列表失败时跳过检测，避免因接口异常误标。
-async fn detect_deleted_videos(
+/// 不在投稿列表中的视频可能是动态来源的视频，会通过详情接口二次确认（-404 才标记删除）；
+/// 拉取列表失败时跳过检测，避免因接口异常误标。返回标记的视频数量。
+pub async fn detect_deleted_videos(
     video_source: &VideoSourceEnum,
     bili_client: &BiliClient,
     credential: &crate::bilibili::Credential,
     connection: &DatabaseConnection,
-) -> Result<()> {
+) -> Result<usize> {
     let current_bvids = video_source.collect_current_bvids(bili_client, credential).await?;
     let videos = video::Entity::find()
         .filter(video_source.filter_expr())
         .filter(video::Column::Valid.eq(true))
         .all(connection)
         .await?;
-    let deleted_ids = videos
-        .iter()
-        .filter(|video_model| !current_bvids.contains(&video_model.bvid))
-        .map(|video_model| {
-            info!(
-                "「{}」视频「{}」（{}）已从 B 站消失，疑似被 UP 删除，标记为已删除",
-                video_source.display_name(),
-                video_model.name,
-                video_model.bvid
-            );
-            video_model.id
-        })
-        .collect::<Vec<_>>();
-    if deleted_ids.is_empty() {
-        return Ok(());
+    let mut confirmed_deleted_ids = Vec::new();
+    for video_model in videos.iter().filter(|v| !current_bvids.contains(&v.bvid)) {
+        // 不在投稿列表里：可能是动态来源的视频，请求详情接口二次确认是否真的被删除
+        let video = Video::new(bili_client, video_model.bvid.as_str(), credential);
+        match video.get_view_info().await {
+            Err(e)
+                if matches!(
+                    e.downcast_ref::<BiliError>(),
+                    Some(BiliError::ErrorResponse { code: -404, .. })
+                ) =>
+            {
+                info!(
+                    "「{}」视频「{}」（{}）已从 B 站消失（-404），标记为已删除",
+                    video_source.display_name(),
+                    video_model.name,
+                    video_model.bvid
+                );
+                confirmed_deleted_ids.push(video_model.id);
+            }
+            Err(e) => {
+                warn!(
+                    "确认「{}」视频「{}」（{}）状态失败，跳过：{:#}",
+                    video_source.display_name(),
+                    video_model.name,
+                    video_model.bvid,
+                    e
+                );
+            }
+            Ok(_) => {
+                // 视频仍存在（如动态来源），保留
+                debug!(
+                    "「{}」视频「{}」（{}）不在投稿列表但视频仍存在，保留",
+                    video_source.display_name(),
+                    video_model.name,
+                    video_model.bvid
+                );
+            }
+        }
+        // 主站接口二次确认请求也保持低频
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    }
+    let deleted_count = confirmed_deleted_ids.len();
+    if confirmed_deleted_ids.is_empty() {
+        return Ok(0);
     }
     video::Entity::update_many()
-        .filter(video::Column::Id.is_in(deleted_ids))
+        .filter(video::Column::Id.is_in(confirmed_deleted_ids))
         .col_expr(video::Column::Valid, Expr::value(false))
         .exec(connection)
         .await?;
-    Ok(())
+    Ok(deleted_count)
 }
 
 /// 筛选出所有未获取到全部信息的视频，尝试补充其详细信息

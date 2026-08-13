@@ -125,6 +125,7 @@ pub async fn get_dynamic_source_stats(
             fan_count: s.fan_count,
             follow_count: s.follow_count,
             video_count: s.video_count,
+            dynamic_video_count: s.dynamic_video_count,
             view_count: s.view_count,
             like_count: s.like_count,
         })

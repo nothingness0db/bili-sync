@@ -5,6 +5,7 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SquarePenIcon from '@lucide/svelte/icons/square-pen';
+	import SearchCheckIcon from '@lucide/svelte/icons/search-check';
 	import api from '$lib/api';
 	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
@@ -57,6 +58,48 @@
 
 	let updateAllDialogOpen = false;
 	let updatingAll = false;
+
+	let scanDeletedDialogOpen = false;
+	let scanningDeleted = false;
+	let selectedSubmissionIds: Set<number> = new Set();
+
+	function handleScanDeleted() {
+		const submissions = videoSources?.submission ?? [];
+		selectedSubmissionIds = new Set(submissions.map((s) => s.id));
+		scanDeletedDialogOpen = true;
+	}
+
+	async function confirmScanDeleted() {
+		scanningDeleted = true;
+		try {
+			const ids = [...selectedSubmissionIds];
+			if (ids.length === 0) {
+				toast.warning('请至少选择一个投稿源');
+				return;
+			}
+			const result = await api.scanDeletedVideos(ids);
+			const { scanned_sources, deleted_count } = result.data;
+			toast.success('检查完成', {
+				description:
+					deleted_count > 0
+						? `扫描了 ${scanned_sources} 个投稿源，发现 ${deleted_count} 个已删除视频`
+						: `扫描了 ${scanned_sources} 个投稿源，未发现已删除视频`
+			});
+			if (deleted_count > 0) {
+				setValidationFilter('invalid');
+				resetCurrentPage();
+				goto(`/${ToQuery($appStateStore)}`);
+			}
+		} catch (error) {
+			console.error('检查已删除视频失败：', error);
+			toast.error('检查失败', {
+				description: (error as ApiError).message
+			});
+		} finally {
+			scanningDeleted = false;
+			scanDeletedDialogOpen = false;
+		}
+	}
 
 	let videoSources: VideoSourcesResponse | null = null;
 	let videoSourcesLoaded = false;
@@ -453,6 +496,16 @@
 				<RotateCcwIcon class="mr-1.5 h-3 w-3 {resettingAll ? 'animate-spin' : ''}" />
 				{hasFilters ? '重置筛选' : '重置全部'}
 			</Button>
+			<Button
+				size="sm"
+				variant="outline"
+				class="hover:bg-accent hover:text-accent-foreground h-8 cursor-pointer text-xs font-medium"
+				onclick={handleScanDeleted}
+				disabled={scanningDeleted || !videoSources?.submission.length}
+			>
+				<SearchCheckIcon class="mr-1.5 h-3 w-3" />
+				检查已删除
+			</Button>
 		</div>
 	</div>
 {/if}
@@ -547,6 +600,82 @@
 					重置中...
 				{:else}
 					{forceReset ? '确认强制重置' : '确认重置'}
+				{/if}
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
+
+<AlertDialog.Root bind:open={scanDeletedDialogOpen}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>检查已删除视频</AlertDialog.Title>
+			<AlertDialog.Description>
+				拉取所选 UP 主当前的全部投稿列表，与本地记录对比，<strong>标记</strong
+				>已从 B 站消失的视频（本地文件保留不动）。<br />
+				可到「有效性 → 失效」筛选查看结果。
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+
+		<div class="py-2">
+			<div class="flex items-center space-x-2">
+				<Checkbox
+					id="select-all-submissions"
+					checked={selectedSubmissionIds.size > 0 &&
+						selectedSubmissionIds.size === (videoSources?.submission.length ?? 0)}
+					onclick={() => {
+						if (
+							selectedSubmissionIds.size ===
+							(videoSources?.submission.length ?? 0)
+						) {
+							selectedSubmissionIds = new Set();
+						} else {
+							selectedSubmissionIds = new Set(
+								(videoSources?.submission ?? []).map((s) => s.id)
+							);
+						}
+					}}
+				/>
+				<Label for="select-all-submissions" class="text-sm font-medium">全选</Label>
+			</div>
+			<div class="bg-muted mt-3 space-y-2 rounded-md p-3">
+				{#each videoSources?.submission ?? [] as source (source.id)}
+					<div class="flex items-center space-x-2">
+						<Checkbox
+							id={`submission-${source.id}`}
+							checked={selectedSubmissionIds.has(source.id)}
+							onclick={() => {
+								const next = new Set(selectedSubmissionIds);
+								if (next.has(source.id)) {
+									next.delete(source.id);
+								} else {
+									next.add(source.id);
+								}
+								selectedSubmissionIds = next;
+							}}
+						/>
+						<Label for={`submission-${source.id}`} class="text-sm">{source.name}</Label>
+					</div>
+				{/each}
+				{#if !(videoSources?.submission.length)}
+					<p class="text-muted-foreground text-sm">暂无投稿源</p>
+				{/if}
+			</div>
+		</div>
+
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel
+				disabled={scanningDeleted}
+				onclick={() => {
+					scanDeletedDialogOpen = false;
+				}}>取消</AlertDialog.Cancel
+			>
+			<AlertDialog.Action onclick={confirmScanDeleted} disabled={scanningDeleted}>
+				{#if scanningDeleted}
+					<SearchCheckIcon class="mr-2 h-4 w-4 animate-pulse" />
+					检查中...
+				{:else}
+					开始检查
 				{/if}
 			</AlertDialog.Action>
 		</AlertDialog.Footer>

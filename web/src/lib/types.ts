@@ -64,6 +64,11 @@ export interface ResetVideoResponse {
 	pages: PageInfo[];
 }
 
+export interface ScanDeletedVideosResponse {
+	scanned_sources: number;
+	deleted_count: number;
+}
+
 export interface ClearAndResetVideoResponse {
 	warning?: string;
 	video: VideoInfo;
@@ -268,6 +273,7 @@ export interface StatPoint {
 	fanCount: number;
 	followCount: number;
 	videoCount: number;
+	dynamicVideoCount: number;
 	viewCount: number;
 	likeCount: number;
 }

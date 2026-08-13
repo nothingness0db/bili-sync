@@ -165,6 +165,12 @@ pub async fn update_upper_stat(
         .order_by_desc(upper_stat::Column::RecordedAt)
         .one(connection)
         .await?;
+    // 动态中的视频数量（已同步的视频动态数，与投稿数相加即为总视频数）
+    let dynamic_video_count = dynamic::Entity::find()
+        .filter(dynamic::Column::SourceId.eq(source.id))
+        .filter(dynamic::Column::DynType.eq("DYNAMIC_TYPE_AV"))
+        .count(connection)
+        .await? as i64;
     let changed = match latest {
         Some(s) => {
             s.name != profile.name
@@ -173,6 +179,7 @@ pub async fn update_upper_stat(
                 || s.fan_count != profile.fan_count
                 || s.follow_count != profile.follow_count
                 || s.video_count != profile.video_count
+                || s.dynamic_video_count != dynamic_video_count
                 || s.view_count != profile.view_count
                 || s.like_count != profile.like_count
         }
@@ -187,6 +194,7 @@ pub async fn update_upper_stat(
             fan_count: Set(profile.fan_count),
             follow_count: Set(profile.follow_count),
             video_count: Set(profile.video_count),
+            dynamic_video_count: Set(dynamic_video_count),
             view_count: Set(profile.view_count),
             like_count: Set(profile.like_count),
             recorded_at: Set(chrono::Utc::now().naive_utc()),
@@ -195,21 +203,23 @@ pub async fn update_upper_stat(
         .exec(connection)
         .await?;
         info!(
-            "「{}」账号信息更新：粉丝 {} 关注 {} 投稿 {} 播放 {} 获赞 {}",
+            "「{}」账号信息更新：粉丝 {} 关注 {} 投稿 {} 动态视频 {} 播放 {} 获赞 {}",
             source.upper_name,
             profile.fan_count,
             profile.follow_count,
             profile.video_count,
+            dynamic_video_count,
             profile.view_count,
             profile.like_count
         );
     } else {
         info!(
-            "「{}」账号信息无变化（粉丝 {} 关注 {} 投稿 {} 播放 {} 获赞 {}），跳过记录",
+            "「{}」账号信息无变化（粉丝 {} 关注 {} 投稿 {} 动态视频 {} 播放 {} 获赞 {}），跳过记录",
             source.upper_name,
             profile.fan_count,
             profile.follow_count,
             profile.video_count,
+            dynamic_video_count,
             profile.view_count,
             profile.like_count
         );

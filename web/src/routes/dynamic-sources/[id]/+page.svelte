@@ -81,11 +81,13 @@
 		return v?.count ?? 0;
 	}
 
-	// 指标配置（五个折线图）
+	// 指标配置（七个折线图），totalVideoCount 为投稿数 + 动态视频数的派生指标
 	const METRICS = [
 		{ key: 'fanCount', label: '粉丝数', color: 'var(--primary)' },
 		{ key: 'followCount', label: '关注数', color: '#22c55e' },
 		{ key: 'videoCount', label: '投稿数', color: '#f59e0b' },
+		{ key: 'dynamicVideoCount', label: '动态视频数', color: '#06b6d4' },
+		{ key: 'totalVideoCount', label: '总视频数', color: '#ef4444' },
 		{ key: 'viewCount', label: '总播放数', color: '#8b5cf6' },
 		{ key: 'likeCount', label: '总获赞数', color: '#ec4899' }
 	] as const;
@@ -93,8 +95,14 @@
 	function buildChartData(points: StatPoint[], key: (typeof METRICS)[number]['key']) {
 		return points.map((p) => ({
 			time: new Date(p.recordedAt),
-			value: p[key]
+			value: key === 'totalVideoCount' ? p.videoCount + p.dynamicVideoCount : p[key]
 		}));
+	}
+
+	function latestMetricValue(key: (typeof METRICS)[number]['key']): number {
+		const last = stats?.stats[stats.stats.length - 1];
+		if (!last) return 0;
+		return key === 'totalVideoCount' ? last.videoCount + last.dynamicVideoCount : last[key];
 	}
 
 	function chartConfig(label: string, color: string) {
@@ -274,11 +282,11 @@
 				<div class="rounded-lg border p-4">
 					<div class="mb-3 flex items-center justify-between">
 						<span class="text-sm font-medium">{metric.label}</span>
-						{#if stats.stats.length > 0}
-							<span class="text-foreground/80 text-lg font-semibold">
-								{stats.stats[stats.stats.length - 1][metric.key].toLocaleString()}
-							</span>
-						{/if}
+					{#if stats.stats.length > 0}
+						<span class="text-foreground/80 text-lg font-semibold">
+							{latestMetricValue(metric.key).toLocaleString()}
+						</span>
+					{/if}
 					</div>
 					{#if stats.stats.length > 1}
 						<Chart.Container

@@ -38,6 +38,8 @@ pub struct StatPoint {
     pub fan_count: i64,
     pub follow_count: i64,
     pub video_count: i64,
+    /// 动态中的视频数量（投稿数 + 动态视频数 = 总视频数）
+    pub dynamic_video_count: i64,
     pub view_count: i64,
     pub like_count: i64,
 }
@@ -161,6 +163,14 @@ pub struct UpdateFilteredVideoStatusResponse {
 pub struct VideoSource {
     pub id: i32,
     pub name: String,
+}
+
+#[derive(Serialize)]
+pub struct ScanDeletedVideosResponse {
+    /// 实际执行检查的投稿源数量
+    pub scanned_sources: usize,
+    /// 标记为已删除的视频数量
+    pub deleted_count: usize,
 }
 
 #[derive(Serialize, DerivePartialModel, FromQueryResult)]
