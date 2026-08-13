@@ -13,7 +13,13 @@
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import CloudDownloadIcon from '@lucide/svelte/icons/cloud-download';
 	import api from '$lib/api';
-	import type { DashBoardResponse, SysInfo, ApiError, TaskStatus, TaskBoardResponse } from '$lib/types';
+	import type {
+		DashBoardResponse,
+		SysInfo,
+		ApiError,
+		TaskStatus,
+		TaskBoardResponse
+	} from '$lib/types';
 	import CalendarIcon from '@lucide/svelte/icons/calendar';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import CircleCheckBigIcon from '@lucide/svelte/icons/circle-check-big';
@@ -225,7 +231,9 @@
 				{/if}
 			</span>
 			<ChevronDownIcon
-				class="text-muted-foreground h-4 w-4 transition-transform {taskBoardOpen ? 'rotate-180' : ''}"
+				class="text-muted-foreground h-4 w-4 transition-transform {taskBoardOpen
+					? 'rotate-180'
+					: ''}"
 			/>
 		</Collapsible.Trigger>
 		<Collapsible.Content>
@@ -246,7 +254,9 @@
 							</div>
 							{#if taskBoard.videoTask.totalSources > 0}
 								<Progress
-									value={(taskBoard.videoTask.currentSourceIndex / taskBoard.videoTask.totalSources) * 100}
+									value={(taskBoard.videoTask.currentSourceIndex /
+										taskBoard.videoTask.totalSources) *
+										100}
 									class="mt-2 h-1.5"
 								/>
 								<div class="text-muted-foreground mt-1 text-xs">
@@ -277,7 +287,9 @@
 										<div class="flex items-center justify-between gap-2 text-sm">
 											<span class="flex min-w-0 items-center gap-1.5">
 												{#if source.active}
-													<LoaderCircleIcon class="text-primary h-3.5 w-3.5 shrink-0 animate-spin" />
+													<LoaderCircleIcon
+														class="text-primary h-3.5 w-3.5 shrink-0 animate-spin"
+													/>
 												{:else}
 													<CircleIcon class="text-muted-foreground h-3.5 w-3.5 shrink-0" />
 												{/if}
@@ -285,7 +297,8 @@
 											</span>
 											{#if source.active}
 												<span class="text-muted-foreground shrink-0 text-xs">
-													{source.phase} {source.current}/{source.total}
+													{source.phase}
+													{source.current}/{source.total}
 												</span>
 											{:else}
 												<span class="text-muted-foreground shrink-0 text-xs">

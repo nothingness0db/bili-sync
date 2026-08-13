@@ -79,7 +79,9 @@
 <div class="space-y-3">
 	<div class="flex items-center gap-2">
 		<div class="relative flex-1">
-			<SearchIcon class="text-muted-foreground absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2" />
+			<SearchIcon
+				class="text-muted-foreground absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2"
+			/>
 			<Input
 				class="pl-8"
 				type="text"
@@ -135,7 +137,9 @@
 					{log.timestamp}
 				</span>
 				<Badge
-					class="w-16 shrink-0 justify-center {getLevelColor(log.level)} bg-primary/90 font-semibold"
+					class="w-16 shrink-0 justify-center {getLevelColor(
+						log.level
+					)} bg-primary/90 font-semibold"
 				>
 					{log.level}
 				</Badge>
