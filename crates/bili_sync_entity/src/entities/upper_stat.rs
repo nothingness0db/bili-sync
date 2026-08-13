@@ -17,6 +17,8 @@ pub struct Model {
     pub video_count: i64,
     /// 动态中的视频数量（已同步的 DYNAMIC_TYPE_AV 动态数）
     pub dynamic_video_count: i64,
+    /// 总视频数（视频投稿 + 仅动态视频）
+    pub total_video_count: i64,
     pub view_count: i64,
     pub like_count: i64,
     pub recorded_at: DateTime,

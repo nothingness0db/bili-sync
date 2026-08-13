@@ -38,8 +38,10 @@ pub struct StatPoint {
     pub fan_count: i64,
     pub follow_count: i64,
     pub video_count: i64,
-    /// 动态中的视频数量（投稿数 + 动态视频数 = 总视频数）
+    /// 动态中的视频数量（仅动态视频，不含投稿中的视频）
     pub dynamic_video_count: i64,
+    /// 总视频数（视频投稿 + 动态视频数）
+    pub total_video_count: i64,
     pub view_count: i64,
     pub like_count: i64,
 }
@@ -301,6 +303,52 @@ pub struct DashBoardResponse {
     pub enabled_submissions: u64,
     pub enable_watch_later: bool,
     pub videos_by_day: Vec<DayCountPair>,
+}
+
+/// 任务看板：视频任务 / 各动态源 / 删除检测的实时进度
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskBoardResponse {
+    pub video_task: TaskBoardVideoTask,
+    pub dynamic_sources: Vec<TaskBoardDynamicSource>,
+    pub scan_task: TaskBoardScanTask,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskBoardVideoTask {
+    /// 是否正在执行
+    pub running: bool,
+    /// 当前阶段：处理视频源 / 处理动态源
+    pub phase: String,
+    pub current_target: String,
+    pub current_source_index: usize,
+    pub total_sources: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskBoardDynamicSource {
+    pub id: i32,
+    pub name: String,
+    /// 是否正在处理该源
+    pub active: bool,
+    /// 当前阶段（active 时有效）：账号快照 / 扫描动态 / 评论同步
+    pub phase: String,
+    pub current: usize,
+    pub total: usize,
+    pub eta_seconds: Option<u64>,
+    /// 该源尚未消化完的动态数（新动态 + 待重扫评论）
+    pub pending: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskBoardScanTask {
+    /// idle / queued / running
+    pub state: String,
+    pub current: usize,
+    pub total: usize,
 }
 
 #[derive(Serialize, Clone, Copy)]

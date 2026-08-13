@@ -275,6 +275,7 @@ export interface StatPoint {
 	followCount: number;
 	videoCount: number;
 	dynamicVideoCount: number;
+	totalVideoCount: number;
 	viewCount: number;
 	likeCount: number;
 }
@@ -451,6 +452,37 @@ export interface DashBoardResponse {
 	enabled_submissions: number;
 	enable_watch_later: boolean;
 	videos_by_day: DayCountPair[];
+}
+
+export interface TaskBoardResponse {
+	videoTask: TaskBoardVideoTask;
+	dynamicSources: TaskBoardDynamicSource[];
+	scanTask: TaskBoardScanTask;
+}
+
+export interface TaskBoardVideoTask {
+	running: boolean;
+	phase: string;
+	currentTarget: string;
+	currentSourceIndex: number;
+	totalSources: number;
+}
+
+export interface TaskBoardDynamicSource {
+	id: number;
+	name: string;
+	active: boolean;
+	phase: string;
+	current: number;
+	total: number;
+	etaSeconds: number | null;
+	pending: number;
+}
+
+export interface TaskBoardScanTask {
+	state: 'idle' | 'queued' | 'running';
+	current: number;
+	total: number;
 }
 
 export interface SysInfo {

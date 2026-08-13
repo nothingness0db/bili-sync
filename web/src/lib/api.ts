@@ -25,6 +25,7 @@ import type {
 	ResetVideoStatusRequest,
 	ScanDeletedVideosResponse,
 	SysInfo,
+	TaskBoardResponse,
 	TaskStatus,
 	UpdateDynamicSourceRequest,
 	UpdateFilteredVideoStatusRequest,
@@ -345,6 +346,10 @@ class ApiClient {
 		return this.get<DashBoardResponse>('/dashboard');
 	}
 
+	async getTaskBoard(): Promise<ApiResponse<TaskBoardResponse>> {
+		return this.get<TaskBoardResponse>('/task-board');
+	}
+
 	async triggerDownloadTask(): Promise<ApiResponse<boolean>> {
 		return this.post<boolean>('/task/download');
 	}
@@ -420,6 +425,7 @@ const api = {
 	getConfig: () => apiClient.getConfig(),
 	updateConfig: (config: Config) => apiClient.updateConfig(config),
 	getDashboard: () => apiClient.getDashboard(),
+	getTaskBoard: () => apiClient.getTaskBoard(),
 	triggerDownloadTask: () => apiClient.triggerDownloadTask(),
 	generateQrcode: () => apiClient.generateQrcode(),
 	pollQrcode: (qrcodeKey: string) => apiClient.pollQrcode(qrcodeKey),

@@ -81,7 +81,7 @@
 		return v?.count ?? 0;
 	}
 
-	// 指标配置（七个折线图），totalVideoCount 为投稿数 + 动态视频数的派生指标
+	// 指标配置（七个折线图），totalVideoCount 由后端计算（视频投稿 + 仅动态视频）
 	const METRICS = [
 		{ key: 'fanCount', label: '粉丝数', color: 'var(--primary)' },
 		{ key: 'followCount', label: '关注数', color: '#22c55e' },
@@ -95,14 +95,14 @@
 	function buildChartData(points: StatPoint[], key: (typeof METRICS)[number]['key']) {
 		return points.map((p) => ({
 			time: new Date(p.recordedAt),
-			value: key === 'totalVideoCount' ? p.videoCount + p.dynamicVideoCount : p[key]
+			value: p[key]
 		}));
 	}
 
 	function latestMetricValue(key: (typeof METRICS)[number]['key']): number {
 		const last = stats?.stats[stats.stats.length - 1];
 		if (!last) return 0;
-		return key === 'totalVideoCount' ? last.videoCount + last.dynamicVideoCount : last[key];
+		return last[key];
 	}
 
 	function chartConfig(label: string, color: string) {

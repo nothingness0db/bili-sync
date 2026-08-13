@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{LazyLock, Mutex as StdMutex};
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use bili_sync_entity::{dynamic, dynamic_source, reply, upper_stat};
@@ -20,6 +21,29 @@ use crate::config::Config;
 use crate::downloader::Downloader;
 use crate::utils::dynamic_render::{render_comments_md, render_dynamic_md};
 use crate::utils::status::STATUS_COMPLETED;
+
+/// 动态源同步的实时进度（供看板展示），任务结束后自动清空
+#[derive(Clone, Default)]
+pub struct SyncProgress {
+    pub source_name: String,
+    /// 当前阶段：账号快照 / 扫描动态 / 评论同步
+    pub phase: String,
+    pub current: usize,
+    pub total: usize,
+    pub eta_seconds: Option<u64>,
+}
+
+static SYNC_PROGRESS: LazyLock<parking_lot::RwLock<SyncProgress>> =
+    LazyLock::new(|| parking_lot::RwLock::new(SyncProgress::default()));
+
+/// 读取当前动态同步进度（看板轮询用）
+pub fn read_sync_progress() -> SyncProgress {
+    SYNC_PROGRESS.read().clone()
+}
+
+fn set_sync_progress(progress: SyncProgress) {
+    *SYNC_PROGRESS.write() = progress;
+}
 
 /// 每个动态源的同步锁，防止定时任务与手动同步并发
 static SOURCE_LOCKS: LazyLock<StdMutex<HashMap<i32, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
@@ -101,13 +125,24 @@ async fn process_dynamic_source_inner(
         .await
         .with_context(|| format!("failed to create dynamic source directory {}", source.path))?;
     info!("开始处理动态源「{}」..", source.upper_name);
+    set_sync_progress(SyncProgress {
+        source_name: source.upper_name.clone(),
+        phase: "账号快照".to_string(),
+        ..Default::default()
+    });
     // 记录账号信息快照（粉丝/关注/投稿/播放/名字/签名），有变化才插入新记录
     update_upper_stat(&source, bili_client, connection, config).await?;
+    set_sync_progress(SyncProgress {
+        source_name: source.upper_name.clone(),
+        phase: "扫描动态".to_string(),
+        ..Default::default()
+    });
     refresh_dynamic_source(&source, bili_client, connection, config).await?;
     // 评论补拉：5 天窗口外的历史动态，若 API 评论数 > 0 但本地无评论，自动标记重扫
     backfill_missing_replies(&source, connection).await?;
     process_unhandled_dynamics(&source, bili_client, connection, config).await?;
     info!("处理动态源「{}」完成", source.upper_name);
+    set_sync_progress(SyncProgress::default());
     Ok(())
 }
 
@@ -211,9 +246,20 @@ async fn collect_dynamic_video_count(
         current_bvids.insert(bvid);
         tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     }
-    // 差集逐个确认
+    // 差集逐个确认（每轮限量，避免靠动态发大量视频的 UP 每轮打海量 view 请求）
+    const MAX_CONFIRM_PER_ROUND: usize = 50;
+    let differences = dynamic_bvids.difference(&current_bvids).collect::<Vec<_>>();
+    if differences.len() > MAX_CONFIRM_PER_ROUND {
+        warn!(
+            "「{}」动态视频差集 {} 个超过每轮确认上限 {}，本轮只确认前 {} 个",
+            source.upper_name,
+            differences.len(),
+            MAX_CONFIRM_PER_ROUND,
+            MAX_CONFIRM_PER_ROUND
+        );
+    }
     let mut count = 0i64;
-    for bvid in dynamic_bvids.difference(&current_bvids) {
+    for bvid in differences.into_iter().take(MAX_CONFIRM_PER_ROUND) {
         let video = Video::new(bili_client, bvid.as_str(), &config.credential);
         match video.get_view_info().await {
             Ok(_) => count += 1,
@@ -232,6 +278,19 @@ async fn collect_dynamic_video_count(
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }
     Ok(count)
+}
+
+/// 手动触发扫描账号信息专用：等待该源当前任务结束后再执行（排队语义，不跳过）
+pub async fn scan_profile_queued(
+    source: dynamic_source::Model,
+    bili_client: &BiliClient,
+    connection: &DatabaseConnection,
+    config: &Config,
+) -> Result<()> {
+    ensure_mixin_key(bili_client, &config.credential).await?;
+    let lock = get_source_lock(source.id);
+    let _guard = lock.lock().await;
+    update_upper_stat(&source, bili_client, connection, config).await
 }
 
 /// 拉取 UP 主账号信息并写入快照表，与最近一条快照对比，有变化才插入
@@ -277,10 +336,13 @@ pub async fn update_upper_stat(
                 return Err(e);
             }
             warn!("统计「{}」动态视频数失败：{:#}", source.upper_name, e);
-            0
+            // 统计失败时跳过本轮快照记录，避免写入伪造的 0 污染曲线
+            return Ok(());
         }
     };
     let video_count = profile.video_count + draw_count;
+    // 总视频数 = 视频投稿 + 仅动态视频（图文投稿不算视频）
+    let total_video_count = profile.video_count + dynamic_video_count;
     let changed = match latest {
         Some(s) => {
             s.name != profile.name
@@ -290,6 +352,7 @@ pub async fn update_upper_stat(
                 || s.follow_count != profile.follow_count
                 || s.video_count != video_count
                 || s.dynamic_video_count != dynamic_video_count
+                || s.total_video_count != total_video_count
                 || s.view_count != profile.view_count
                 || s.like_count != profile.like_count
         }
@@ -305,6 +368,7 @@ pub async fn update_upper_stat(
             follow_count: Set(profile.follow_count),
             video_count: Set(video_count),
             dynamic_video_count: Set(dynamic_video_count),
+            total_video_count: Set(total_video_count),
             view_count: Set(profile.view_count),
             like_count: Set(profile.like_count),
             recorded_at: Set(chrono::Utc::now().naive_utc()),
@@ -313,7 +377,7 @@ pub async fn update_upper_stat(
         .exec(connection)
         .await?;
         info!(
-            "「{}」账号信息更新：粉丝 {} 关注 {} 投稿 {}（视频 {} + 图文 {}）动态视频 {} 播放 {} 获赞 {}",
+            "「{}」账号信息更新：粉丝 {} 关注 {} 投稿 {}（视频 {} + 图文 {}）动态视频 {} 总视频 {} 播放 {} 获赞 {}",
             source.upper_name,
             profile.fan_count,
             profile.follow_count,
@@ -321,17 +385,19 @@ pub async fn update_upper_stat(
             profile.video_count,
             draw_count,
             dynamic_video_count,
+            total_video_count,
             profile.view_count,
             profile.like_count
         );
     } else {
         info!(
-            "「{}」账号信息无变化（粉丝 {} 关注 {} 投稿 {} 动态视频 {} 播放 {} 获赞 {}），跳过记录",
+            "「{}」账号信息无变化（粉丝 {} 关注 {} 投稿 {} 动态视频 {} 总视频 {} 播放 {} 获赞 {}），跳过记录",
             source.upper_name,
             profile.fan_count,
             profile.follow_count,
             video_count,
             dynamic_video_count,
+            total_video_count,
             profile.view_count,
             profile.like_count
         );
@@ -477,8 +543,19 @@ async fn process_unhandled_dynamics(
     let downloader = Downloader::new(bili_client.client.clone());
     let reply_api = Reply::new(bili_client, &config.credential);
     let total = dynamics.len();
+    // 每条动态处理耗时的滑动平均（秒），用于估算剩余时间
+    let mut avg_item_secs: Option<f64> = None;
     for (idx, dyn_model) in dynamics.into_iter().enumerate() {
+        let item_start = Instant::now();
         let dyn_id = dyn_model.id.clone();
+        let eta_seconds = avg_item_secs.map(|avg| ((total - idx - 1) as f64 * avg).ceil() as u64);
+        set_sync_progress(SyncProgress {
+            source_name: source.upper_name.clone(),
+            phase: "评论同步".to_string(),
+            current: idx + 1,
+            total,
+            eta_seconds,
+        });
         info!(
             "开始处理「{}」第 {}/{} 条动态 {}..",
             source.upper_name,
@@ -494,6 +571,11 @@ async fn process_unhandled_dynamics(
                 bail!(e);
             }
         }
+        let elapsed = item_start.elapsed().as_secs_f64();
+        avg_item_secs = Some(match avg_item_secs {
+            Some(prev) => prev * 0.7 + elapsed * 0.3,
+            None => elapsed,
+        });
     }
     Ok(())
 }
@@ -549,6 +631,7 @@ async fn process_dynamic(
     let within_window =
         dyn_model.pub_ts.and_utc() + chrono::Duration::days(REPLY_SYNC_WINDOW_DAYS) >= chrono::Utc::now();
     let need_rescan = dyn_model.rescan_reply;
+    let mut synced_replies = false;
     if source.sync_reply && (within_window || need_rescan) {
         info!(
             "动态 {} 本体已处理，评论待扫描{}，开始同步评论..",
@@ -587,6 +670,7 @@ async fn process_dynamic(
                 return Err(e);
             }
         }
+        synced_replies = true;
         info!(
             "动态 {} 评论同步完成{}",
             dyn_model.id,
@@ -599,6 +683,25 @@ async fn process_dynamic(
     model.download_status = Set(STATUS_COMPLETED);
     model.path = Set(dir.to_string_lossy().to_string());
     model.rescan_reply = Set(false);
+    if synced_replies {
+        // 回写 stat 快照为实际同步到的评论数，避免补拉逻辑每轮重复标记
+        // （快照超过分页封顶或评论被清理时，本地数量永远达不到快照值）
+        let local_count = reply::Entity::find()
+            .filter(reply::Column::DynamicId.eq(&dyn_id))
+            .count(connection)
+            .await? as i64;
+        if let Some(mut stat_value) = model.stat.take() {
+            if let Some(comment) = stat_value
+                .as_mut()
+                .and_then(|s| s.as_object_mut())
+                .and_then(|o| o.get_mut("comment"))
+                .and_then(|c| c.as_object_mut())
+            {
+                comment.insert("count".to_string(), serde_json::json!(local_count));
+            }
+            model.stat = Set(stat_value);
+        }
+    }
     model.save(connection).await?;
     info!("处理动态 {dyn_id} 完成");
     Ok(())

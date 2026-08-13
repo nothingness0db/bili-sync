@@ -30,9 +30,27 @@ use crate::config::VersionedConfig;
 use crate::task::DownloadTaskManager;
 use crate::utils::status::{PageStatus, VideoStatus};
 use crate::workflow::detect_deleted_videos;
+use crate::workflow_dynamic::ensure_mixin_key;
 
 /// 防连点：同一时刻只允许一个手动删除检测任务
 static SCAN_DEAD_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// 删除检测任务的实时进度（供看板展示）
+#[derive(Clone, Default)]
+pub struct ScanTaskProgress {
+    /// idle / queued / running
+    pub state: String,
+    pub current: usize,
+    pub total: usize,
+}
+
+static SCAN_TASK_PROGRESS: LazyLock<parking_lot::RwLock<ScanTaskProgress>> =
+    LazyLock::new(|| parking_lot::RwLock::new(ScanTaskProgress::default()));
+
+/// 读取删除检测进度（看板轮询用）
+pub fn read_scan_task_progress() -> ScanTaskProgress {
+    SCAN_TASK_PROGRESS.read().clone()
+}
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -132,19 +150,43 @@ pub async fn scan_deleted_videos(
         Some(ids) if !ids.is_empty() => {
             submission::Entity::find()
                 .filter(submission::Column::Id.is_in(ids.clone()))
+                .filter(submission::Column::Enabled.eq(true))
                 .all(&db)
                 .await?
         }
-        _ => submission::Entity::find().all(&db).await?,
+        _ => {
+            submission::Entity::find()
+                .filter(submission::Column::Enabled.eq(true))
+                .all(&db)
+                .await?
+        }
     };
     let planned = sources.len();
     let connection = db.clone();
+    *SCAN_TASK_PROGRESS.write() = ScanTaskProgress {
+        state: "queued".to_string(),
+        current: 0,
+        total: planned,
+    };
     // 后台执行：排队等当前视频任务结束后再跑，不与周期任务抢 API 额度
     tokio::spawn(async move {
+        // 独立初始化 wbi 签名密钥（启动后未跑过定时任务时全局密钥可能尚未初始化）
+        {
+            let config = VersionedConfig::get().read();
+            if let Err(e) = ensure_mixin_key(&bili_client, &config.credential).await {
+                warn!("删除检测初始化 wbi 签名密钥失败：{:#}", e);
+            }
+        }
         let _task_guard = DownloadTaskManager::get().wait_and_acquire().await;
+        *SCAN_TASK_PROGRESS.write() = ScanTaskProgress {
+            state: "running".to_string(),
+            current: 0,
+            total: planned,
+        };
         let config = VersionedConfig::get().read();
         let (mut scanned, mut deleted, mut restored) = (0, 0, 0);
-        for source in sources {
+        for (idx, source) in sources.into_iter().enumerate() {
+            SCAN_TASK_PROGRESS.write().current = idx + 1;
             let video_source: VideoSourceEnum = source.into();
             match detect_deleted_videos(&video_source, &bili_client, &config.credential, &connection).await {
                 Ok((d, r)) => {
@@ -161,6 +203,7 @@ pub async fn scan_deleted_videos(
             "手动删除检测完成：扫描 {} 个投稿源，新标记删除 {} 个，恢复有效 {} 个",
             scanned, deleted, restored
         );
+        *SCAN_TASK_PROGRESS.write() = ScanTaskProgress::default();
         // dedup_guard 在任务完成后释放，允许下一次触发
         drop(dedup_guard);
     });

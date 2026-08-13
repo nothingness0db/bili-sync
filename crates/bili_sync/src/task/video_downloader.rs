@@ -1,5 +1,5 @@
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -17,6 +17,31 @@ use crate::workflow::process_video_source;
 use crate::workflow_dynamic::process_dynamic_source;
 
 static INSTANCE: OnceCell<DownloadTaskManager> = OnceCell::const_new();
+
+/// 视频任务的实时进度（供看板展示），任务结束后自动清空
+#[derive(Clone, Default)]
+pub struct VideoTaskProgress {
+    /// 当前阶段：扫描视频源 / 填充详情 / 下载 / 处理动态源
+    pub phase: String,
+    /// 当前处理的对象名（视频源名/动态源名）
+    pub current_target: String,
+    /// 视频源序号（第几个）
+    pub current_source_index: usize,
+    /// 视频源总数
+    pub total_sources: usize,
+}
+
+static VIDEO_TASK_PROGRESS: LazyLock<parking_lot::RwLock<VideoTaskProgress>> =
+    LazyLock::new(|| parking_lot::RwLock::new(VideoTaskProgress::default()));
+
+/// 读取当前视频任务进度（看板轮询用）
+pub fn read_video_task_progress() -> VideoTaskProgress {
+    VIDEO_TASK_PROGRESS.read().clone()
+}
+
+fn set_video_task_progress(progress: VideoTaskProgress) {
+    *VIDEO_TASK_PROGRESS.write() = progress;
+}
 
 /// 启动周期下载视频的任务
 pub async fn video_downloader(connection: DatabaseConnection, bili_client: Arc<BiliClient>) -> Result<()> {
@@ -364,8 +389,15 @@ async fn download_video(
     if video_sources.is_empty() {
         warn!("没有可用的视频源");
     }
-    for video_source in video_sources {
+    let total_video_sources = video_sources.len();
+    for (idx, video_source) in video_sources.into_iter().enumerate() {
         let display_name = video_source.display_name();
+        set_video_task_progress(VideoTaskProgress {
+            phase: "处理视频源".to_string(),
+            current_target: display_name.to_string(),
+            current_source_index: idx + 1,
+            total_sources: total_video_sources,
+        });
         if let Err(e) = process_video_source(video_source, &bili_client, connection, &template, config).await {
             error_and_notify(
                 config,
@@ -377,6 +409,7 @@ async fn download_video(
                 && e.is_risk_control_related()
             {
                 warn!("检测到风控，终止此轮视频下载任务..");
+                set_video_task_progress(VideoTaskProgress::default());
                 return Ok(());
             }
         }
@@ -387,6 +420,12 @@ async fn download_video(
         .context("获取动态源列表失败")?;
     for dynamic_source in dynamic_sources {
         let display_name = dynamic_source.upper_name.clone();
+        set_video_task_progress(VideoTaskProgress {
+            phase: "处理动态源".to_string(),
+            current_target: display_name.clone(),
+            current_source_index: 0,
+            total_sources: 0,
+        });
         if let Err(e) = process_dynamic_source(dynamic_source, &bili_client, connection, config).await {
             error_and_notify(
                 config,
@@ -402,5 +441,6 @@ async fn download_video(
             }
         }
     }
+    set_video_task_progress(VideoTaskProgress::default());
     Ok(())
 }

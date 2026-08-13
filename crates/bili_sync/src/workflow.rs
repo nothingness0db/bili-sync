@@ -173,8 +173,9 @@ pub async fn detect_deleted_videos(
                 );
             }
             Ok(_) => {
-                // 视频仍存在（如动态来源或此前误标），恢复为有效
-                if !video_model.valid {
+                // 视频仍存在（如动态来源或此前误标）：仅恢复曾被标记删除的（deleted_at 非空），
+                // 不触碰用户规则/其他原因标记为无效的视频
+                if !video_model.valid && video_model.deleted_at.is_some() {
                     info!(
                         "「{}」视频「{}」（{}）仍存在，恢复为有效",
                         video_source.display_name(),

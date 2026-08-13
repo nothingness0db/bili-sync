@@ -21,7 +21,7 @@ use crate::api::response::{
 use crate::api::wrapper::{ApiError, ApiResponse};
 use crate::bilibili::BiliClient;
 use crate::config::VersionedConfig;
-use crate::workflow_dynamic::{ensure_mixin_key, process_dynamic_source_queued, update_upper_stat};
+use crate::workflow_dynamic::{process_dynamic_source_queued, scan_profile_queued};
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -90,6 +90,7 @@ pub async fn get_dynamic_file(
 }
 
 /// 立即扫描一次该动态源的账号信息（名字/签名/头像/粉丝/关注/投稿/播放）
+/// 排队执行：等待该源正在进行的同步结束后再跑，不并发抢 API 额度
 pub async fn scan_profile(
     Path(id): Path<i32>,
     Extension(db): Extension<DatabaseConnection>,
@@ -99,9 +100,7 @@ pub async fn scan_profile(
         return Err(InnerApiError::NotFound(id).into());
     };
     let config = VersionedConfig::get().snapshot();
-    // 手动扫描路径不依赖定时任务，独立初始化 wbi 签名密钥
-    ensure_mixin_key(&bili_client, &config.credential).await?;
-    update_upper_stat(&source, &bili_client, &db, &config).await?;
+    scan_profile_queued(source, &bili_client, &db, &config).await?;
     Ok(ApiResponse::ok(true))
 }
 
@@ -126,6 +125,7 @@ pub async fn get_dynamic_source_stats(
             follow_count: s.follow_count,
             video_count: s.video_count,
             dynamic_video_count: s.dynamic_video_count,
+            total_video_count: s.total_video_count,
             view_count: s.view_count,
             like_count: s.like_count,
         })
