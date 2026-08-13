@@ -254,7 +254,9 @@
 								</div>
 							{/if}
 						{:else}
-							<div class="text-muted-foreground text-sm">未进行 · 等待下轮任务</div>
+							<div class="text-muted-foreground text-sm">
+								正常运行中 · 等待下轮任务（周期 20 分钟）
+							</div>
 						{/if}
 					</CardContent>
 				</Card>
@@ -294,9 +296,10 @@
 										{#if source.active && source.total > 0}
 											<Progress value={(source.current / source.total) * 100} class="mt-1 h-1.5" />
 										{/if}
-										{#if source.active && source.etaSeconds !== null}
+										{#if source.etaSeconds !== null}
 											<div class="text-muted-foreground mt-0.5 text-xs">
-												预计剩余 {formatEta(source.etaSeconds)}
+												{#if source.active}预计剩余{:else}预计耗时{/if}
+												{formatEta(source.etaSeconds)}
 											</div>
 										{/if}
 									</div>

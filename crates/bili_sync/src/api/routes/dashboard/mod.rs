@@ -45,18 +45,38 @@ async fn get_task_board(
             .count(&db)
             .await? as usize;
         let active = sync_progress.source_name == source.upper_name;
+        // 每条动态处理的大致耗时（秒），用于给等待源和未实测的进行中源兜底估算
+        const ESTIMATED_ITEM_SECS: usize = 600;
+        let (phase, current, total, eta_seconds) = if active {
+            (
+                sync_progress.phase.clone(),
+                sync_progress.current,
+                sync_progress.total,
+                sync_progress.eta_seconds.or_else(|| {
+                    // 本轮刚开始、尚未有实测数据时按固定估算
+                    sync_progress
+                        .total
+                        .saturating_sub(sync_progress.current)
+                        .checked_mul(ESTIMATED_ITEM_SECS)
+                        .map(|v| v as u64)
+                }),
+            )
+        } else {
+            (
+                String::new(),
+                0,
+                0,
+                pending.checked_mul(ESTIMATED_ITEM_SECS).map(|v| v as u64),
+            )
+        };
         dynamic_sources.push(TaskBoardDynamicSource {
             id: source.id,
             name: source.upper_name,
             active,
-            phase: if active {
-                sync_progress.phase.clone()
-            } else {
-                String::new()
-            },
-            current: if active { sync_progress.current } else { 0 },
-            total: if active { sync_progress.total } else { 0 },
-            eta_seconds: if active { sync_progress.eta_seconds } else { None },
+            phase,
+            current,
+            total,
+            eta_seconds,
             pending,
         });
     }
