@@ -155,6 +155,10 @@ async fn backfill_missing_replies(source: &dynamic_source::Model, connection: &D
     const BACKFILL_CHECK_LIMIT: u64 = 50;
     /// 每轮最多标记的待重扫动态数（与每轮处理上限对齐，避免积压无限膨胀）
     const MAX_BACKFILL_MARK_PER_ROUND: usize = 5;
+    // 未开启评论同步的源不做补拉标记，避免白标记后又被直接清掉
+    if !source.sync_reply {
+        return Ok(());
+    }
     let mut candidates = dynamic::Entity::find()
         .filter(dynamic::Column::SourceId.eq(source.id))
         .filter(dynamic::Column::Valid.eq(true))
@@ -263,12 +267,7 @@ async fn collect_dynamic_video_count(
         let video = Video::new(bili_client, bvid.as_str(), &config.credential);
         match video.get_view_info().await {
             Ok(_) => count += 1,
-            Err(e)
-                if matches!(
-                    e.downcast_ref::<BiliError>(),
-                    Some(BiliError::ErrorResponse { code: -404, .. })
-                ) =>
-            {
+            Err(e) if matches!(e.downcast_ref::<BiliError>(), Some(inner) if inner.is_video_not_found()) => {
                 // 已删除投稿，不算动态视频
             }
             Err(e) => {

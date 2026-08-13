@@ -340,6 +340,10 @@ pub struct TaskBoardDynamicSource {
     pub eta_seconds: Option<u64>,
     /// 该源尚未消化完的动态数（新动态 + 待重扫评论）
     pub pending: usize,
+    /// 该源待补拉的评论缺口条数（API 评论数 > 本地评论数的差值总和；未开启评论同步时为 0）
+    pub reply_gap: usize,
+    /// 该源是否开启评论同步
+    pub sync_reply: bool,
 }
 
 #[derive(Serialize)]
@@ -349,6 +353,12 @@ pub struct TaskBoardScanTask {
     pub state: String,
     pub current: usize,
     pub total: usize,
+    /// 当前正在检测的源名（running 时有效）
+    pub current_source: String,
+    /// 当前源内差集已确认数（0 表示未开始或已确认完）
+    pub confirm_current: usize,
+    /// 当前源内差集待确认总数
+    pub confirm_total: usize,
 }
 
 #[derive(Serialize, Clone, Copy)]

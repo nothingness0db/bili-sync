@@ -42,6 +42,12 @@ pub struct ScanTaskProgress {
     pub state: String,
     pub current: usize,
     pub total: usize,
+    /// 当前正在检测的源名（running 时有效）
+    pub current_source: String,
+    /// 当前源内差集已确认数（0 表示未开始或已确认完）
+    pub confirm_current: usize,
+    /// 当前源内差集待确认总数
+    pub confirm_total: usize,
 }
 
 static SCAN_TASK_PROGRESS: LazyLock<parking_lot::RwLock<ScanTaskProgress>> =
@@ -50,6 +56,13 @@ static SCAN_TASK_PROGRESS: LazyLock<parking_lot::RwLock<ScanTaskProgress>> =
 /// 读取删除检测进度（看板轮询用）
 pub fn read_scan_task_progress() -> ScanTaskProgress {
     SCAN_TASK_PROGRESS.read().clone()
+}
+
+/// 上报源内差集确认进度（workflow::detect_deleted_videos 调用）
+pub fn update_scan_confirm_progress(current: usize, total: usize) {
+    let mut progress = SCAN_TASK_PROGRESS.write();
+    progress.confirm_current = current;
+    progress.confirm_total = total;
 }
 
 pub(super) fn router() -> Router {
@@ -167,6 +180,7 @@ pub async fn scan_deleted_videos(
         state: "queued".to_string(),
         current: 0,
         total: planned,
+        ..Default::default()
     };
     // 后台执行：排队等当前视频任务结束后再跑，不与周期任务抢 API 额度
     tokio::spawn(async move {
@@ -182,12 +196,17 @@ pub async fn scan_deleted_videos(
             state: "running".to_string(),
             current: 0,
             total: planned,
+            ..Default::default()
         };
         let config = VersionedConfig::get().read();
         let (mut scanned, mut deleted, mut restored) = (0, 0, 0);
         for (idx, source) in sources.into_iter().enumerate() {
-            SCAN_TASK_PROGRESS.write().current = idx + 1;
             let video_source: VideoSourceEnum = source.into();
+            {
+                let mut progress = SCAN_TASK_PROGRESS.write();
+                progress.current = idx + 1;
+                progress.current_source = video_source.display_name().to_string();
+            }
             match detect_deleted_videos(&video_source, &bili_client, &config.credential, &connection).await {
                 Ok((d, r)) => {
                     scanned += 1;

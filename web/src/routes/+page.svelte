@@ -302,7 +302,13 @@
 												</span>
 											{:else}
 												<span class="text-muted-foreground shrink-0 text-xs">
-													积压 {source.pending} 条
+													{#if !source.syncReply}
+														待扫 {source.pending} 动态 · 评论同步关闭
+													{:else if source.replyGap > 0}
+														待扫 {source.pending} 动态 · 缺 {source.replyGap} 评论
+													{:else}
+														待扫 {source.pending} 动态
+													{/if}
 												</span>
 											{/if}
 										</div>
@@ -334,6 +340,12 @@
 								<Badge variant="default">检测中</Badge>
 								<span class="text-muted-foreground text-xs">
 									第 {taskBoard.scanTask.current} / {taskBoard.scanTask.total} 个源
+									{#if taskBoard.scanTask.confirmTotal > 0}
+										·「{taskBoard.scanTask.currentSource}」确认中 {taskBoard.scanTask
+											.confirmCurrent}/{taskBoard.scanTask.confirmTotal}
+									{:else if taskBoard.scanTask.currentSource}
+										·「{taskBoard.scanTask.currentSource}」
+									{/if}
 								</span>
 							</div>
 							{#if taskBoard.scanTask.total > 0}

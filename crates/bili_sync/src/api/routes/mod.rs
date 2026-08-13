@@ -21,6 +21,7 @@ mod video_sources;
 mod videos;
 mod ws;
 
+pub use videos::update_scan_confirm_progress;
 pub use ws::{LogHelper, MAX_HISTORY_LOGS};
 
 pub fn router() -> Router {

@@ -127,7 +127,7 @@ pub async fn refresh_video_source<'a>(
 /// - 未标记（valid = true）且已确认从 B 站消失的视频 → 标记为失效并记录删除时间
 /// - 已标记失效但视频仍存在（如动态来源或被误标）→ 恢复为有效
 ///
-/// 不影响已下载的本地文件；不在投稿列表中的视频会通过详情接口二次确认（-404 才标记删除）；
+/// 不影响已下载的本地文件；不在投稿列表中的视频会通过详情接口二次确认（确认已删除才标记）；
 /// 拉取列表失败时跳过检测，避免因接口异常误标。返回 (新标记删除数, 恢复有效数)。
 pub async fn detect_deleted_videos(
     video_source: &VideoSourceEnum,
@@ -143,19 +143,23 @@ pub async fn detect_deleted_videos(
         .await?;
     let mut confirmed_deleted_ids = Vec::new();
     let mut restored_ids = Vec::new();
-    for video_model in videos.iter().filter(|v| !current_bvids.contains(&v.bvid)) {
+    // 差集：本地有但不在当前投稿列表中的视频，需逐个调详情接口确认
+    let to_confirm: Vec<_> = videos.iter().filter(|v| !current_bvids.contains(&v.bvid)).collect();
+    info!(
+        "「{}」投稿列表拉取完成：当前 {} 个投稿，本地 {} 个视频，{} 个不在列表内需逐个确认",
+        video_source.display_name(),
+        current_bvids.len(),
+        videos.len(),
+        to_confirm.len()
+    );
+    for (idx, video_model) in to_confirm.iter().enumerate() {
         // 不在投稿列表里：可能是动态来源的视频或被删除的视频，请求详情接口确认
         let video = Video::new(bili_client, video_model.bvid.as_str(), credential);
         match video.get_view_info().await {
-            Err(e)
-                if matches!(
-                    e.downcast_ref::<BiliError>(),
-                    Some(BiliError::ErrorResponse { code: -404, .. })
-                ) =>
-            {
+            Err(e) if matches!(e.downcast_ref::<BiliError>(), Some(inner) if inner.is_video_not_found()) => {
                 if video_model.valid {
                     info!(
-                        "「{}」视频「{}」（{}）已从 B 站消失（-404），标记为已删除",
+                        "「{}」视频「{}」（{}）已从 B 站消失，标记为已删除",
                         video_source.display_name(),
                         video_model.name,
                         video_model.bvid
@@ -173,9 +177,10 @@ pub async fn detect_deleted_videos(
                 );
             }
             Ok(_) => {
-                // 视频仍存在（如动态来源或此前误标）：仅恢复曾被标记删除的（deleted_at 非空），
-                // 不触碰用户规则/其他原因标记为无效的视频
-                if !video_model.valid && video_model.deleted_at.is_some() {
+                // 视频仍存在（如动态来源或此前误标）：恢复所有已失效视频。
+                // 规则过滤用的是 should_download 字段、不会动 valid，valid = false 只会来自
+                // 删除检测/详情标记，因此只要详情接口确认仍存在就可以安全恢复
+                if !video_model.valid {
                     info!(
                         "「{}」视频「{}」（{}）仍存在，恢复为有效",
                         video_source.display_name(),
@@ -193,9 +198,22 @@ pub async fn detect_deleted_videos(
                 }
             }
         }
+        // 上报源内确认进度（任务看板展示用）
+        crate::api::update_scan_confirm_progress(idx + 1, to_confirm.len());
+        // 每确认 10 个（或最后一个）打一条进度日志
+        if (idx + 1) % 10 == 0 || idx + 1 == to_confirm.len() {
+            info!(
+                "「{}」删除检测确认进度 {}/{}",
+                video_source.display_name(),
+                idx + 1,
+                to_confirm.len()
+            );
+        }
         // 主站接口二次确认请求也保持低频
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     }
+    // 当前源确认完毕，清零源内进度（confirm_total 为 0 时前端不显示源内进度）
+    crate::api::update_scan_confirm_progress(0, 0);
     let deleted_count = confirmed_deleted_ids.len();
     if !confirmed_deleted_ids.is_empty() {
         let ids = std::mem::take(&mut confirmed_deleted_ids);
@@ -237,7 +255,9 @@ pub async fn fetch_video_details(
                         "获取视频 {} - {} 的详细信息失败，错误为：{:#}",
                         &video_model.bvid, &video_model.name, e
                     );
-                    if let Some(BiliError::ErrorResponse { code: -404, .. }) = e.downcast_ref::<BiliError>() {
+                    if let Some(inner) = e.downcast_ref::<BiliError>()
+                        && inner.is_video_not_found()
+                    {
                         Some(VideoDetailUpdate::Invalid(video_model.id))
                     } else {
                         None

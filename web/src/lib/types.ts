@@ -477,12 +477,17 @@ export interface TaskBoardDynamicSource {
 	total: number;
 	etaSeconds: number | null;
 	pending: number;
+	replyGap: number;
+	syncReply: boolean;
 }
 
 export interface TaskBoardScanTask {
 	state: 'idle' | 'queued' | 'running';
 	current: number;
 	total: number;
+	currentSource: string;
+	confirmCurrent: number;
+	confirmTotal: number;
 }
 
 export interface SysInfo {

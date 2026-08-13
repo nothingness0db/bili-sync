@@ -44,9 +44,30 @@ async fn get_task_board(
             )
             .count(&db)
             .await? as usize;
+        // 该源待补拉的评论缺口条数：API 评论数（stat 快照）> 本地评论数的差值总和；未开启评论同步时不统计
+        let reply_gap = if source.sync_reply {
+            db.query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                r#"
+SELECT COALESCE(SUM(CAST(json_extract(d.stat,'$.comment.count') AS INTEGER) - COALESCE(rc.cnt, 0)), 0) AS gap
+FROM dynamic d
+LEFT JOIN (SELECT dynamic_id, COUNT(*) AS cnt FROM reply GROUP BY dynamic_id) rc ON rc.dynamic_id = d.id
+WHERE d.source_id = ? AND d.valid = 1
+  AND CAST(json_extract(d.stat,'$.comment.count') AS INTEGER) > COALESCE(rc.cnt, 0)
+"#,
+                [source.id.into()],
+            ))
+            .await?
+            .map(|row| row.try_get::<i64>("", "gap"))
+            .transpose()?
+            .unwrap_or(0) as usize
+        } else {
+            0
+        };
         let active = sync_progress.source_name == source.upper_name;
         // 每条动态处理的大致耗时（秒），用于给等待源和未实测的进行中源兜底估算
-        const ESTIMATED_ITEM_SECS: usize = 600;
+        // 依据「重扫评论每轮 5 条 + 任务轮间隔约 20 分钟」≈ 每条 240 秒
+        const ESTIMATED_ITEM_SECS: usize = 240;
         let (phase, current, total, eta_seconds) = if active {
             (
                 sync_progress.phase.clone(),
@@ -78,6 +99,8 @@ async fn get_task_board(
             total,
             eta_seconds,
             pending,
+            reply_gap,
+            sync_reply: source.sync_reply,
         });
     }
     Ok(ApiResponse::ok(TaskBoardResponse {
@@ -93,6 +116,9 @@ async fn get_task_board(
             state: scan.state,
             current: scan.current,
             total: scan.total,
+            current_source: scan.current_source,
+            confirm_current: scan.confirm_current,
+            confirm_total: scan.confirm_total,
         },
     }))
 }

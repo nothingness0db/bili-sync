@@ -10,7 +10,7 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 
 	let unsubscribeLog: (() => void) | null = null;
-	let logs: Array<{ timestamp: string; level: string; message: string }> = [];
+	let logs = $state<Array<{ timestamp: string; level: string; message: string }>>([]);
 	let shouldAutoScroll = true;
 	let paused = $state(false);
 	let main: HTMLElement | null = null;
@@ -45,7 +45,11 @@
 		main = document.getElementById('main');
 		main?.addEventListener('scroll', checkScrollPosition);
 		unsubscribeLog = api.subscribeToLogs((data: string) => {
-			logs = [...logs.slice(-799), JSON.parse(data)];
+			try {
+				logs = [...logs.slice(-799), JSON.parse(data)];
+			} catch {
+				// 忽略无法解析的日志行（例如非 JSON 的分片写入）
+			}
 			if (scrollTimer) clearTimeout(scrollTimer);
 			scrollTimer = setTimeout(scrollToBottom, 20);
 		});

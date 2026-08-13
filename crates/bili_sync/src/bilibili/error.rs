@@ -36,4 +36,10 @@ impl BiliError {
         }
         false
     }
+
+    /// 稿件已删除/不存在：-404 为旧版返回码，62012 为新版返回码
+    /// 注意 62002「稿件不可见」（审核中/锁定/退回）不算删除，调用方应继续跳过
+    pub fn is_video_not_found(&self) -> bool {
+        matches!(self, BiliError::ErrorResponse { code, .. } if *code == -404 || *code == 62012)
+    }
 }
