@@ -282,11 +282,11 @@
 				<div class="rounded-lg border p-4">
 					<div class="mb-3 flex items-center justify-between">
 						<span class="text-sm font-medium">{metric.label}</span>
-					{#if stats.stats.length > 0}
-						<span class="text-foreground/80 text-lg font-semibold">
-							{latestMetricValue(metric.key).toLocaleString()}
-						</span>
-					{/if}
+						{#if stats.stats.length > 0}
+							<span class="text-foreground/80 text-lg font-semibold">
+								{latestMetricValue(metric.key).toLocaleString()}
+							</span>
+						{/if}
 					</div>
 					{#if stats.stats.length > 1}
 						<Chart.Container

@@ -611,8 +611,8 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title>检查已删除视频</AlertDialog.Title>
 			<AlertDialog.Description>
-				拉取所选 UP 主当前的全部投稿列表，与本地记录对比，<strong>标记</strong
-				>已从 B 站消失的视频（本地文件保留不动）。<br />
+				拉取所选 UP 主当前的全部投稿列表，与本地记录对比，<strong>标记</strong>已从 B
+				站消失的视频（本地文件保留不动）。<br />
 				可到「有效性 → 失效」筛选查看结果。
 			</AlertDialog.Description>
 		</AlertDialog.Header>
@@ -624,15 +624,10 @@
 					checked={selectedSubmissionIds.size > 0 &&
 						selectedSubmissionIds.size === (videoSources?.submission.length ?? 0)}
 					onclick={() => {
-						if (
-							selectedSubmissionIds.size ===
-							(videoSources?.submission.length ?? 0)
-						) {
+						if (selectedSubmissionIds.size === (videoSources?.submission.length ?? 0)) {
 							selectedSubmissionIds = new Set();
 						} else {
-							selectedSubmissionIds = new Set(
-								(videoSources?.submission ?? []).map((s) => s.id)
-							);
+							selectedSubmissionIds = new Set((videoSources?.submission ?? []).map((s) => s.id));
 						}
 					}}
 				/>
@@ -657,7 +652,7 @@
 						<Label for={`submission-${source.id}`} class="text-sm">{source.name}</Label>
 					</div>
 				{/each}
-				{#if !(videoSources?.submission.length)}
+				{#if !videoSources?.submission.length}
 					<p class="text-muted-foreground text-sm">暂无投稿源</p>
 				{/if}
 			</div>

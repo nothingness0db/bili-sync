@@ -23,6 +23,7 @@ import type {
 	ResetFilteredVideoStatusRequest,
 	ResetVideoResponse,
 	ResetVideoStatusRequest,
+	ScanDeletedVideosResponse,
 	SysInfo,
 	TaskStatus,
 	UpdateDynamicSourceRequest,
@@ -225,8 +226,12 @@ class ApiClient {
 		return this.post<ResetVideoResponse>(`/videos/${id}/reset-status`, request);
 	}
 
-	async scanDeletedVideos(submissionIds: number[]): Promise<ApiResponse<ScanDeletedVideosResponse>> {
-		return this.post<ScanDeletedVideosResponse>('/videos/scan-deleted', { submission_ids: submissionIds });
+	async scanDeletedVideos(
+		submissionIds: number[]
+	): Promise<ApiResponse<ScanDeletedVideosResponse>> {
+		return this.post<ScanDeletedVideosResponse>('/videos/scan-deleted', {
+			submission_ids: submissionIds
+		});
 	}
 
 	async clearAndResetVideoStatus(id: number): Promise<ApiResponse<ClearAndResetVideoResponse>> {
