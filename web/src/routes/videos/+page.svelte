@@ -78,18 +78,9 @@
 				return;
 			}
 			const result = await api.scanDeletedVideos(ids);
-			const { scanned_sources, deleted_count } = result.data;
-			toast.success('检查完成', {
-				description:
-					deleted_count > 0
-						? `扫描了 ${scanned_sources} 个投稿源，发现 ${deleted_count} 个已删除视频`
-						: `扫描了 ${scanned_sources} 个投稿源，未发现已删除视频`
+			toast.success('已加入队列', {
+				description: `将扫描 ${result.data.scanned_sources} 个投稿源，任务会在当前任务结束后自动执行，结果见日志页`
 			});
-			if (deleted_count > 0) {
-				setValidationFilter('invalid');
-				resetCurrentPage();
-				goto(`/${ToQuery($appStateStore)}`);
-			}
 		} catch (error) {
 			console.error('检查已删除视频失败：', error);
 			toast.error('检查失败', {

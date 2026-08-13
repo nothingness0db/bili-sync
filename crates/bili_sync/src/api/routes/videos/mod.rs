@@ -117,19 +117,17 @@ pub async fn get_video(
 }
 
 /// 手动触发「检查已删除视频」：拉取指定投稿源（为空则全部）的当前视频列表，
-/// 将本地已有但已从 B 站消失的视频标记为失效，不影响本地文件
+/// 将本地已有但已从 B 站消失的视频标记为失效，不影响本地文件。
+/// 提交后立即返回，任务排队等当前视频任务结束后在后台执行，结果见日志页
 pub async fn scan_deleted_videos(
     Extension(db): Extension<DatabaseConnection>,
     Extension(bili_client): Extension<Arc<BiliClient>>,
     Json(request): Json<ScanDeletedVideosRequest>,
 ) -> Result<ApiResponse<ScanDeletedVideosResponse>, ApiError> {
     // 防连点：已有检测在跑（含排队等待中）时直接拒绝
-    let _dedup_guard = SCAN_DEAD_LOCK
+    let dedup_guard = SCAN_DEAD_LOCK
         .try_lock()
         .map_err(|_| InnerApiError::BadRequest("已有删除检测任务在进行中，请等待完成后再试".to_string()))?;
-    // 排队：等待当前视频任务（含动态处理）结束后再执行，不与周期任务抢 API 额度
-    let _task_guard = DownloadTaskManager::get().wait_and_acquire().await;
-    let config = VersionedConfig::get().read();
     let sources = match &request.submission_ids {
         Some(ids) if !ids.is_empty() => {
             submission::Entity::find()
@@ -139,23 +137,36 @@ pub async fn scan_deleted_videos(
         }
         _ => submission::Entity::find().all(&db).await?,
     };
-    let mut scanned_sources = 0;
-    let mut deleted_count = 0;
-    for source in sources {
-        let video_source: VideoSourceEnum = source.into();
-        match detect_deleted_videos(&video_source, &bili_client, &config.credential, &db).await {
-            Ok(count) => {
-                scanned_sources += 1;
-                deleted_count += count;
-            }
-            Err(e) => {
-                warn!("检查「{}」已删除视频失败：{:#}", video_source.display_name(), e);
+    let planned = sources.len();
+    let connection = db.clone();
+    // 后台执行：排队等当前视频任务结束后再跑，不与周期任务抢 API 额度
+    tokio::spawn(async move {
+        let _task_guard = DownloadTaskManager::get().wait_and_acquire().await;
+        let config = VersionedConfig::get().read();
+        let (mut scanned, mut deleted, mut restored) = (0, 0, 0);
+        for source in sources {
+            let video_source: VideoSourceEnum = source.into();
+            match detect_deleted_videos(&video_source, &bili_client, &config.credential, &connection).await {
+                Ok((d, r)) => {
+                    scanned += 1;
+                    deleted += d;
+                    restored += r;
+                }
+                Err(e) => {
+                    warn!("检查「{}」已删除视频失败：{:#}", video_source.display_name(), e);
+                }
             }
         }
-    }
+        info!(
+            "手动删除检测完成：扫描 {} 个投稿源，新标记删除 {} 个，恢复有效 {} 个",
+            scanned, deleted, restored
+        );
+        // dedup_guard 在任务完成后释放，允许下一次触发
+        drop(dedup_guard);
+    });
     Ok(ApiResponse::ok(ScanDeletedVideosResponse {
-        scanned_sources,
-        deleted_count,
+        scanned_sources: planned,
+        deleted_count: 0,
     }))
 }
 

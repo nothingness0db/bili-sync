@@ -128,13 +128,13 @@ pub async fn refresh_video_source<'a>(
 /// - 已标记失效但视频仍存在（如动态来源或被误标）→ 恢复为有效
 ///
 /// 不影响已下载的本地文件；不在投稿列表中的视频会通过详情接口二次确认（-404 才标记删除）；
-/// 拉取列表失败时跳过检测，避免因接口异常误标。返回新标记删除的数量。
+/// 拉取列表失败时跳过检测，避免因接口异常误标。返回 (新标记删除数, 恢复有效数)。
 pub async fn detect_deleted_videos(
     video_source: &VideoSourceEnum,
     bili_client: &BiliClient,
     credential: &crate::bilibili::Credential,
     connection: &DatabaseConnection,
-) -> Result<usize> {
+) -> Result<(usize, usize)> {
     let current_bvids = video_source.collect_current_bvids(bili_client, credential).await?;
     // 全部视频都参与评估（含已标记失效的，用于恢复误标）
     let videos = video::Entity::find()
@@ -197,13 +197,15 @@ pub async fn detect_deleted_videos(
     }
     let deleted_count = confirmed_deleted_ids.len();
     if !confirmed_deleted_ids.is_empty() {
+        let ids = std::mem::take(&mut confirmed_deleted_ids);
         video::Entity::update_many()
-            .filter(video::Column::Id.is_in(confirmed_deleted_ids))
+            .filter(video::Column::Id.is_in(ids))
             .col_expr(video::Column::Valid, Expr::value(false))
             .col_expr(video::Column::DeletedAt, Expr::value(chrono::Utc::now().naive_utc()))
             .exec(connection)
             .await?;
     }
+    let restored_count = restored_ids.len();
     if !restored_ids.is_empty() {
         video::Entity::update_many()
             .filter(video::Column::Id.is_in(restored_ids))
@@ -212,7 +214,7 @@ pub async fn detect_deleted_videos(
             .exec(connection)
             .await?;
     }
-    Ok(deleted_count)
+    Ok((deleted_count, restored_count))
 }
 
 /// 筛选出所有未获取到全部信息的视频，尝试补充其详细信息
