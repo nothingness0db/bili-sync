@@ -42,7 +42,7 @@
 	import FilteredStatusEditor from '$lib/components/filtered-status-editor.svelte';
 	import StatusFilter from '$lib/components/status-filter.svelte';
 	import ValidationFilter from '$lib/components/validation-filter.svelte';
-	import { SvelteMap } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 	const pageSize = 20;
 
@@ -61,11 +61,11 @@
 
 	let scanDeletedDialogOpen = false;
 	let scanningDeleted = false;
-	let selectedSubmissionIds: Set<number> = new Set();
+	let selectedSubmissionIds: SvelteSet<number> = new SvelteSet();
 
 	function handleScanDeleted() {
 		const submissions = videoSources?.submission ?? [];
-		selectedSubmissionIds = new Set(submissions.map((s) => s.id));
+		selectedSubmissionIds = new SvelteSet(submissions.map((s) => s.id));
 		scanDeletedDialogOpen = true;
 	}
 
@@ -625,9 +625,11 @@
 						selectedSubmissionIds.size === (videoSources?.submission.length ?? 0)}
 					onclick={() => {
 						if (selectedSubmissionIds.size === (videoSources?.submission.length ?? 0)) {
-							selectedSubmissionIds = new Set();
+							selectedSubmissionIds = new SvelteSet();
 						} else {
-							selectedSubmissionIds = new Set((videoSources?.submission ?? []).map((s) => s.id));
+							selectedSubmissionIds = new SvelteSet(
+								(videoSources?.submission ?? []).map((s) => s.id)
+							);
 						}
 					}}
 				/>
@@ -640,7 +642,7 @@
 							id={`submission-${source.id}`}
 							checked={selectedSubmissionIds.has(source.id)}
 							onclick={() => {
-								const next = new Set(selectedSubmissionIds);
+								const next = new SvelteSet(selectedSubmissionIds);
 								if (next.has(source.id)) {
 									next.delete(source.id);
 								} else {
