@@ -665,6 +665,15 @@ async fn process_dynamic(
                 model.download_status = Set(STATUS_COMPLETED);
                 model.save(connection).await?;
                 return Ok(());
+            } else if let Some(BiliError::ErrorResponse { code: 12002, .. }) = e.downcast_ref::<BiliError>() {
+                // 评论功能已关闭（12002）：动态仍在但没有评论，按正常完成处理，不再重试
+                warn!("动态 {} 评论功能已关闭（12002），按无评论完成", dyn_model.id);
+                let mut model: dynamic::ActiveModel = dyn_model.clone().into();
+                model.download_status = Set(STATUS_COMPLETED);
+                model.rescan_reply = Set(false);
+                model.path = Set(dir.to_string_lossy().to_string());
+                model.save(connection).await?;
+                return Ok(());
             } else {
                 return Err(e);
             }
@@ -774,22 +783,26 @@ async fn save_replies(dynamic_id: &str, replies: &[ReplyInfo], connection: &Data
     if models.is_empty() {
         return Ok(());
     }
-    reply::Entity::insert_many(models)
-        .on_conflict(
-            OnConflict::column(reply::Column::Rpid)
-                .update_columns([
-                    reply::Column::ParentRpid,
-                    reply::Column::Uname,
-                    reply::Column::Avatar,
-                    reply::Column::Content,
-                    reply::Column::Images,
-                    reply::Column::Ctime,
-                    reply::Column::Raw,
-                ])
-                .to_owned(),
-        )
-        .exec(connection)
-        .await?;
+    // 分批插入：reply 表列数较多，超过 SQLite 绑定变量上限（999）会报
+    // too many SQL variables，热门动态评论（含楼中楼）可达数千条，每批 80 条留足余量
+    for chunk in models.chunks(80) {
+        reply::Entity::insert_many(chunk.to_vec())
+            .on_conflict(
+                OnConflict::column(reply::Column::Rpid)
+                    .update_columns([
+                        reply::Column::ParentRpid,
+                        reply::Column::Uname,
+                        reply::Column::Avatar,
+                        reply::Column::Content,
+                        reply::Column::Images,
+                        reply::Column::Ctime,
+                        reply::Column::Raw,
+                    ])
+                    .to_owned(),
+            )
+            .exec(connection)
+            .await?;
+    }
     Ok(())
 }
 
