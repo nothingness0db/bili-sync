@@ -11,6 +11,8 @@ export interface VideosRequest {
 	query?: string;
 	status_filter?: 'failed' | 'succeeded' | 'waiting';
 	validation_filter?: 'skipped' | 'invalid' | 'normal';
+	created_from?: string;
+	created_to?: string;
 	page?: number;
 	page_size?: number;
 }
@@ -130,6 +132,8 @@ export interface UpdateFilteredVideoStatusRequest {
 	query?: string;
 	status_filter?: 'failed' | 'succeeded' | 'waiting';
 	validation_filter?: 'skipped' | 'invalid' | 'normal';
+	created_from?: string;
+	created_to?: string;
 	video_updates?: StatusUpdate[];
 	page_updates?: StatusUpdate[];
 }
@@ -146,6 +150,8 @@ export interface ResetFilteredVideoStatusRequest {
 	query?: string;
 	status_filter?: 'failed' | 'succeeded' | 'waiting';
 	validation_filter?: 'skipped' | 'invalid' | 'normal';
+	created_from?: string;
+	created_to?: string;
 	force: boolean;
 }
 
@@ -373,6 +379,15 @@ export interface DanmakuOption {
 	time_offset: number;
 }
 
+export interface DanmakuUpdatePolicy {
+	enabled: boolean;
+	milestones: DanmakuUpdateMilestone[];
+}
+
+export type DanmakuUpdateMilestone =
+	| { type: 'once'; at_days: number }
+	| { type: 'periodic'; until_days: number; interval_hours: number };
+
 export interface SkipOption {
 	no_poster: boolean;
 	no_video_nfo: boolean;
@@ -423,6 +438,7 @@ export interface Config {
 	credential: Credential;
 	filter_option: FilterOption;
 	danmaku_option: DanmakuOption;
+	danmaku_update_policy: DanmakuUpdatePolicy;
 	skip_option: SkipOption;
 	video_name: string;
 	page_name: string;

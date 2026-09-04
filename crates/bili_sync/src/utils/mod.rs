@@ -1,4 +1,5 @@
 pub mod convert;
+pub mod danmaku_schedule;
 pub mod download_context;
 pub mod dynamic_render;
 pub mod filenamify;

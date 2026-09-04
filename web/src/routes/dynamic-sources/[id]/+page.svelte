@@ -47,11 +47,12 @@
 		{ label: '7天', days: 7 }
 	] as const;
 
-	function filteredStats(): StatPoint[] {
+	// 筛选后的数据点（按时间范围），模板统一引用
+	const filtered = $derived.by(() => {
 		if (!stats || rangeDays === null) return stats?.stats ?? [];
 		const cutoff = Date.now() - rangeDays * 24 * 3600 * 1000;
 		return stats.stats.filter((p) => new Date(p.recordedAt).getTime() >= cutoff);
-	}
+	});
 
 	// 动态详情对话框
 	let showDetailDialog = false;
@@ -288,13 +289,13 @@
 							</span>
 						{/if}
 					</div>
-					{#if stats.stats.length > 1}
+					{#if filtered.length > 1}
 						<Chart.Container
 							config={chartConfig(metric.label, metric.color)}
 							class="h-[150px] w-full"
 						>
 							<AreaChart
-								data={buildChartData(filteredStats(), metric.key)}
+								data={buildChartData(filtered, metric.key)}
 								x="time"
 								axis="x"
 								series={[
@@ -311,14 +312,20 @@
 									}
 								}}
 							>
-								{#snippet tooltip()}
-									<MyChartTooltip indicator="line" />
+								{#snippet tooltip({ context })}
+									<MyChartTooltip {context} indicator="line" />
 								{/snippet}
 							</AreaChart>
 						</Chart.Container>
+					{:else if filtered.length === 1}
+						<div class="text-muted-foreground flex h-[150px] items-center justify-center text-sm">
+							该时间范围内仅 1 条记录，需至少 2 条才能绘制趋势图
+						</div>
 					{:else}
 						<div class="text-muted-foreground flex h-[150px] items-center justify-center text-sm">
-							数据不足，等待记录（下一轮任务执行后）
+							{rangeDays === null
+								? '数据不足，等待记录（下一轮任务执行后）'
+								: '该时间范围内暂无数据'}
 						</div>
 					{/if}
 				</div>

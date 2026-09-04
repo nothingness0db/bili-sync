@@ -18,6 +18,8 @@ mod m20260808_000003_add_like_count;
 mod m20260813_000004_add_dynamic_video_count;
 mod m20260813_000005_add_total_video_count;
 mod m20260813_000006_add_video_deleted_at;
+mod m20260821_025000_mark_empty_tags_for_refetch;
+mod m20260823_000001_add_danmaku_last_synced_at;
 
 pub struct Migrator;
 
@@ -37,12 +39,14 @@ impl MigratorTrait for Migrator {
             Box::new(m20251009_123713_add_use_dynamic_api::Migration),
             Box::new(m20260324_055217_add_staff::Migration),
             Box::new(m20260712_123205_add_filter_option::Migration),
-            Box::new(m20260808_000001_dynamic_sync::Migration),
+Box::new(m20260808_000001_dynamic_sync::Migration),
             Box::new(m20260808_000002_upper_stat::Migration),
             Box::new(m20260808_000003_add_like_count::Migration),
             Box::new(m20260813_000004_add_dynamic_video_count::Migration),
             Box::new(m20260813_000005_add_total_video_count::Migration),
             Box::new(m20260813_000006_add_video_deleted_at::Migration),
+            Box::new(m20260821_025000_mark_empty_tags_for_refetch::Migration),
+            Box::new(m20260823_000001_add_danmaku_last_synced_at::Migration),
         ]
     }
 }

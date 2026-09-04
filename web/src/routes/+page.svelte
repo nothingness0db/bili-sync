@@ -483,8 +483,8 @@
 									xAxis: { format: () => '' }
 								}}
 							>
-								{#snippet tooltip()}
-									<MyChartTooltip indicator="line" />
+								{#snippet tooltip({ context })}
+									<MyChartTooltip {context} indicator="line" />
 								{/snippet}
 							</BarChart>
 						</Chart.Container>
@@ -638,8 +638,9 @@
 									}
 								}}
 							>
-								{#snippet tooltip()}
+								{#snippet tooltip({ context })}
 									<MyChartTooltip
+										{context}
 										labelFormatter={(timestamp: number) => {
 											return formatTimestamp(timestamp);
 										}}
@@ -700,8 +701,9 @@
 									}
 								}}
 							>
-								{#snippet tooltip()}
+								{#snippet tooltip({ context })}
 									<MyChartTooltip
+										{context}
 										labelFormatter={(timestamp: number) => {
 											return formatTimestamp(timestamp);
 										}}
