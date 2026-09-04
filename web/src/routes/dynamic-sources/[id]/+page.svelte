@@ -64,11 +64,11 @@
 	}
 
 	// 图表 x 轴固定为所选时间范围（全部 = 数据范围）
-	function chartXDomain(): [number, number] | undefined {
+	function chartXDomain(): [Date, Date] | undefined {
 		if (rangeDays === null) return undefined;
 		const last = stats?.stats[stats.stats.length - 1];
-		const end = last ? new Date(last.recordedAt).getTime() : Date.now();
-		return [end - rangeDays * 24 * 3600 * 1000, end];
+		const end = last ? new Date(last.recordedAt) : new Date();
+		return [new Date(end.getTime() - rangeDays * 24 * 3600 * 1000), end];
 	}
 
 	// 动态详情对话框
