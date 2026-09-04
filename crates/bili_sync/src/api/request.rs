@@ -153,6 +153,12 @@ pub struct InsertDynamicSourceRequest {
     pub sync_reply: bool,
 }
 
+#[derive(Deserialize)]
+pub struct DynamicSourcesRequest {
+    pub page: Option<u64>,
+    pub page_size: Option<u64>,
+}
+
 #[derive(Deserialize, Validate)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateDynamicSourceRequest {

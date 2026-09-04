@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::extract::Request;
 use axum::http::HeaderMap;
 use axum::middleware::Next;
@@ -43,16 +45,24 @@ pub fn router() -> Router {
 
 /// 中间件：使用 auth token 对请求进行身份验证
 pub async fn auth(mut headers: HeaderMap, request: Request, next: Next) -> Result<Response, StatusCode> {
-    // 动态文件接口（仅 pics/ 与 comments/ 下受限路径的图片）供 <img> 标签直接访问，豁免 token 校验
-    if request.uri().path().ends_with("/file") {
-        return Ok(next.run(request).await);
-    }
     let config = VersionedConfig::get().read();
     let token = config.auth_token.as_str();
     if headers
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|s| s == token)
+    {
+        return Ok(next.run(request).await);
+    }
+    // <img> 标签不能设置 Authorization header；动态文件只接受显式携带的 token，
+    // 不再对所有 /file 路径匿名放行。
+    if request.uri().path().ends_with("/file")
+        && request
+            .uri()
+            .query()
+            .and_then(|query| serde_urlencoded::from_str::<HashMap<String, String>>(query).ok())
+            .and_then(|params| params.get("auth_token").cloned())
+            .is_some_and(|value| value == token)
     {
         return Ok(next.run(request).await);
     }

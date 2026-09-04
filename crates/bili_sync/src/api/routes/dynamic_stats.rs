@@ -11,12 +11,14 @@ use axum::routing::{get, post};
 use bili_sync_entity::*;
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
-use sea_orm::{DatabaseConnection, QueryFilter, QueryOrder, QuerySelect, QueryTrait};
+use sea_orm::{DatabaseConnection, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
 
 use crate::api::error::InnerApiError;
+use crate::api::request::DynamicSourcesRequest;
 use crate::api::response::{
-    DynamicDetailResponse, DynamicListItem, DynamicStatsResponse, ReplyItem, StatPoint, UpperVersion,
+    DynamicDetailResponse, DynamicDynamicsResponse, DynamicListItem, DynamicStatsResponse, ReplyItem, StatPoint,
+    UpperVersion,
 };
 use crate::api::wrapper::{ApiError, ApiResponse};
 use crate::bilibili::BiliClient;
@@ -157,46 +159,46 @@ pub async fn get_dynamic_source_stats(
 /// 获取动态源下的动态列表（用于手动重扫单条评论）
 pub async fn get_dynamic_source_dynamics(
     Path(id): Path<i32>,
+    Query(params): Query<DynamicSourcesRequest>,
     Extension(db): Extension<DatabaseConnection>,
-) -> Result<ApiResponse<Vec<DynamicListItem>>, ApiError> {
+) -> Result<ApiResponse<DynamicDynamicsResponse>, ApiError> {
     let Some(source) = dynamic_source::Entity::find_by_id(id).one(&db).await? else {
         return Err(InnerApiError::NotFound(id).into());
     };
-    let dynamics = dynamic::Entity::find()
+    let page = params.page.unwrap_or(0);
+    let page_size = params.page_size.unwrap_or(20).clamp(1, 100);
+    let query = dynamic::Entity::find()
         .filter(dynamic::Column::SourceId.eq(source.id))
-        .order_by_desc(dynamic::Column::PubTs)
-        .all(&db)
-        .await?;
-    // 一次聚合查询拿到所有动态的本地评论数，避免 N+1
+        .order_by_desc(dynamic::Column::PubTs);
+    let total_count = query.clone().count(&db).await?;
+    let dynamics = query.paginate(&db, page_size).fetch_page(page).await?;
+    let dynamic_ids = dynamics.iter().map(|d| d.id.clone()).collect::<Vec<_>>();
+
+    // 只聚合当前页的评论数，避免打开大账号动态页时扫描全部评论。
     #[derive(sea_orm::FromQueryResult)]
     struct ReplyCountRow {
         dynamic_id: String,
         cnt: i64,
     }
-    let reply_counts: std::collections::HashMap<String, i64> = reply::Entity::find()
-        .filter(
-            reply::Column::DynamicId.in_subquery(
-                dynamic::Entity::find()
-                    .filter(dynamic::Column::SourceId.eq(source.id))
-                    .select_only()
-                    .column(dynamic::Column::Id)
-                    .as_query()
-                    .to_owned(),
-            ),
-        )
-        .select_only()
-        .column(reply::Column::DynamicId)
-        .column_as(reply::Column::Rpid.count(), "cnt")
-        .group_by(reply::Column::DynamicId)
-        .into_model::<ReplyCountRow>()
-        .all(&db)
-        .await?
+    let reply_counts = if dynamic_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        reply::Entity::find()
+            .filter(reply::Column::DynamicId.is_in(dynamic_ids))
+            .select_only()
+            .column(reply::Column::DynamicId)
+            .column_as(reply::Column::Rpid.count(), "cnt")
+            .group_by(reply::Column::DynamicId)
+            .into_model::<ReplyCountRow>()
+            .all(&db)
+            .await?
+            .into_iter()
+            .map(|row| (row.dynamic_id, row.cnt))
+            .collect()
+    };
+    let items = dynamics
         .into_iter()
-        .map(|row| (row.dynamic_id, row.cnt))
-        .collect();
-    let mut items = Vec::with_capacity(dynamics.len());
-    for d in dynamics {
-        items.push(DynamicListItem {
+        .map(|d| DynamicListItem {
             id: d.id.clone(),
             dyn_type: d.dyn_type.clone(),
             content: d.content.chars().take(100).collect(),
@@ -210,9 +212,12 @@ pub async fn get_dynamic_source_dynamics(
             rescan_reply: d.rescan_reply,
             path: d.path,
             valid: d.valid,
-        });
-    }
-    Ok(ApiResponse::ok(items))
+        })
+        .collect();
+    Ok(ApiResponse::ok(DynamicDynamicsResponse {
+        dynamics: items,
+        total_count,
+    }))
 }
 
 /// 获取动态详情（正文全文 + 评论树）
@@ -234,9 +239,9 @@ pub async fn get_dynamic_detail(
         .clone()
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
+    // 展示全部本地评论：B 站已删除/失效的评论也属于用户要保留的历史记录。
     let replies = reply::Entity::find()
         .filter(reply::Column::DynamicId.eq(&dyn_id))
-        .filter(reply::Column::Valid.eq(true))
         .order_by_asc(reply::Column::Ctime)
         .all(&db)
         .await?;
@@ -258,6 +263,7 @@ pub async fn get_dynamic_detail(
                 content: r.content.clone(),
                 images,
                 ctime: r.ctime,
+                valid: r.valid,
                 sub_replies: Vec::new(),
             },
         );

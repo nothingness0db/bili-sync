@@ -51,10 +51,18 @@ fn render_comment(reply: &ReplyInfo, depth: usize, index: usize) -> String {
     let indent = "  ".repeat(depth);
     let mut out = String::new();
     let time = reply.ctime.format("%Y-%m-%d %H:%M:%S");
-    if depth == 0 {
-        out.push_str(&format!("{indent}### 评论 {index}  @{}（{}）\n\n", reply.uname, time));
+    let status = if reply.valid {
+        ""
     } else {
-        out.push_str(&format!("{indent}- 回复 @{}（{}）\n", reply.uname, time));
+        "【B 站已失效，本地保留】"
+    };
+    if depth == 0 {
+        out.push_str(&format!(
+            "{indent}### 评论 {index}  @{}{}（{}）\n\n",
+            reply.uname, status, time
+        ));
+    } else {
+        out.push_str(&format!("{indent}- 回复 @{}{}（{}）\n", reply.uname, status, time));
     }
     if !reply.content.is_empty() {
         out.push_str(&format!(

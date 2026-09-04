@@ -21,6 +21,8 @@ pub struct ReplyInfo {
     /// 评论中的图片 URL
     pub images: Vec<String>,
     pub ctime: DateTime<Utc>,
+    /// 是否仍被 B 站标记为有效；本地历史记录即使失效也保留
+    pub valid: bool,
     /// 原始 JSON
     pub raw: Value,
     /// 楼中楼回复
@@ -134,6 +136,7 @@ impl<'a> Reply<'a> {
             content,
             images,
             ctime,
+            valid: true,
             raw: reply.clone(),
             sub_replies: Vec::new(),
         })

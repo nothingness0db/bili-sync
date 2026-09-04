@@ -1,4 +1,6 @@
-use anyhow::Result;
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
 use axum::Router;
 use axum::extract::{Extension, Path};
 use axum::routing::{get, put};
@@ -106,7 +108,14 @@ pub async fn insert_dynamic_source(
     Ok(ApiResponse::ok(true))
 }
 
-/// 更新动态源
+/// 回滚已完成的动态目录迁移；失败时尽力恢复文件系统状态。
+async fn rollback_moved_dynamic_dirs(moved: &[(PathBuf, PathBuf)]) {
+    for (old_dir, new_dir) in moved.iter().rev() {
+        let _ = tokio::fs::rename(new_dir, old_dir).await;
+    }
+}
+
+/// 更新动态源；修改保存路径时同步迁移已有动态目录并更新数据库中的路径。
 pub async fn update_dynamic_source(
     Path(id): Path<i32>,
     Extension(db): Extension<DatabaseConnection>,
@@ -115,11 +124,107 @@ pub async fn update_dynamic_source(
     let Some(model) = dynamic_source::Entity::find_by_id(id).one(&db).await? else {
         return Err(InnerApiError::NotFound(id).into());
     };
-    let mut active_model: dynamic_source::ActiveModel = model.into();
-    active_model.path = Set(request.path);
-    active_model.enabled = Set(request.enabled);
-    active_model.sync_reply = Set(request.sync_reply);
-    active_model.save(&db).await?;
+    let old_path = PathBuf::from(&model.path);
+    let new_path = PathBuf::from(&request.path);
+    let dynamics = if old_path != new_path {
+        dynamic::Entity::find()
+            .filter(dynamic::Column::SourceId.eq(id))
+            .all(&db)
+            .await?
+    } else {
+        Vec::new()
+    };
+
+    let mut moved = Vec::new();
+    if old_path != new_path {
+        tokio::fs::create_dir_all(&new_path)
+            .await
+            .with_context(|| format!("failed to create dynamic source directory {}", new_path.display()))?;
+        for dyn_model in &dynamics {
+            if dyn_model.path.is_empty() {
+                continue;
+            }
+            let old_dir = PathBuf::from(&dyn_model.path);
+            let Some(name) = old_dir.file_name() else {
+                continue;
+            };
+            let new_dir = new_path.join(name);
+            if old_dir == new_dir {
+                continue;
+            }
+            let target_exists = match tokio::fs::try_exists(&new_dir).await {
+                Ok(exists) => exists,
+                Err(error) => {
+                    rollback_moved_dynamic_dirs(&moved).await;
+                    return Err(anyhow::Error::from(error)
+                        .context(format!("failed to inspect target directory {}", new_dir.display()))
+                        .into());
+                }
+            };
+            if target_exists {
+                rollback_moved_dynamic_dirs(&moved).await;
+                return Err(anyhow::anyhow!(
+                    "cannot migrate dynamic {}: target directory {} already exists",
+                    dyn_model.id,
+                    new_dir.display()
+                )
+                .into());
+            }
+            let source_exists = match tokio::fs::try_exists(&old_dir).await {
+                Ok(exists) => exists,
+                Err(error) => {
+                    rollback_moved_dynamic_dirs(&moved).await;
+                    return Err(anyhow::Error::from(error)
+                        .context(format!("failed to inspect source directory {}", old_dir.display()))
+                        .into());
+                }
+            };
+            if source_exists {
+                if let Err(error) = tokio::fs::rename(&old_dir, &new_dir).await {
+                    rollback_moved_dynamic_dirs(&moved).await;
+                    return Err(anyhow::Error::from(error)
+                        .context(format!("failed to move {} to {}", old_dir.display(), new_dir.display()))
+                        .into());
+                }
+                moved.push((old_dir, new_dir));
+            }
+        }
+    }
+
+    let txn = match db.begin().await {
+        Ok(txn) => txn,
+        Err(error) => {
+            rollback_moved_dynamic_dirs(&moved).await;
+            return Err(error.into());
+        }
+    };
+    let result: Result<(), anyhow::Error> = async {
+        for dyn_model in dynamics {
+            let old_dir = PathBuf::from(&dyn_model.path);
+            let Some(name) = old_dir.file_name() else {
+                continue;
+            };
+            if !old_dir.as_os_str().is_empty() && old_dir != new_path.join(name) {
+                let mut active: dynamic::ActiveModel = dyn_model.into();
+                active.path = Set(new_path.join(name).to_string_lossy().to_string());
+                active.update(&txn).await?;
+            }
+        }
+        let mut active_model: dynamic_source::ActiveModel = model.into();
+        active_model.path = Set(request.path);
+        active_model.enabled = Set(request.enabled);
+        active_model.sync_reply = Set(request.sync_reply);
+        active_model.update(&txn).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = result {
+        for (from, to) in moved.into_iter().rev() {
+            let _ = tokio::fs::rename(&to, &from).await;
+        }
+        return Err(error.into());
+    }
     Ok(ApiResponse::ok(true))
 }
 

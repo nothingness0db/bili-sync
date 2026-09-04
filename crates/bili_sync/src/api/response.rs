@@ -73,6 +73,13 @@ pub struct DynamicListItem {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DynamicDynamicsResponse {
+    pub dynamics: Vec<DynamicListItem>,
+    pub total_count: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DynamicDetailResponse {
     pub id: String,
     pub dyn_type: String,
@@ -96,6 +103,8 @@ pub struct ReplyItem {
     pub content: String,
     pub images: Vec<String>,
     pub ctime: DateTime,
+    /// B 站已失效但仍保留在本地的历史评论
+    pub valid: bool,
     pub sub_replies: Vec<ReplyItem>,
 }
 

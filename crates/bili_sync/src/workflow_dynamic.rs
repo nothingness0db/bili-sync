@@ -45,6 +45,14 @@ fn set_sync_progress(progress: SyncProgress) {
     *SYNC_PROGRESS.write() = progress;
 }
 
+struct SyncProgressGuard;
+
+impl Drop for SyncProgressGuard {
+    fn drop(&mut self) {
+        set_sync_progress(SyncProgress::default());
+    }
+}
+
 /// 每个动态源的同步锁，防止定时任务与手动同步并发
 static SOURCE_LOCKS: LazyLock<StdMutex<HashMap<i32, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
@@ -121,6 +129,7 @@ async fn process_dynamic_source_inner(
     connection: &DatabaseConnection,
     config: &Config,
 ) -> Result<()> {
+    let _progress_guard = SyncProgressGuard;
     fs::create_dir_all(&source.path)
         .await
         .with_context(|| format!("failed to create dynamic source directory {}", source.path))?;
@@ -731,22 +740,24 @@ async fn sync_dynamic_replies(
         warn!("动态 {dynamic_id} 缺少评论信息（comment_type={comment_type}），跳过评论同步");
         return Ok(());
     }
-    let replies = reply_api
+    let current_replies = reply_api
         .get_replies(comment_type, comment_oid, MAX_REPLY_PAGES, MAX_SUB_REPLY_PAGES)
         .await
         .with_context(|| format!("failed to get replies of dynamic {dynamic_id}"))?;
-    // 写入数据库
-    save_replies(dynamic_id, &replies, connection).await?;
+    // 写入数据库；已有 valid=false 的历史评论不会被删除或重新标记。
+    save_replies(dynamic_id, &current_replies, connection).await?;
+    // 从本地数据库导出完整历史，而不是用 B 站本轮返回结果覆盖历史评论。
+    let local_replies = load_local_replies(dynamic_id, connection).await?;
     // 导出 JSON / Markdown
     fs::create_dir_all(comments_dir).await?;
     fs::write(
         comments_dir.join("comments.json"),
-        serde_json::to_string_pretty(&replies)?,
+        serde_json::to_string_pretty(&local_replies)?,
     )
     .await?;
-    fs::write(comments_dir.join("comments.md"), render_comments_md(&replies)).await?;
-    // 下载评论图片（并发，图片走 CDN 不占主站风控额度，并发数复用分块下载配置）
-    let image_tasks = replies
+    fs::write(comments_dir.join("comments.md"), render_comments_md(&local_replies)).await?;
+    // 只下载本轮从 B 站返回的评论图片；历史失效评论的图片已在此前同步时处理过。
+    let image_tasks = current_replies
         .iter()
         .flat_map(|reply| {
             let mut tasks = Vec::new();
@@ -769,6 +780,79 @@ async fn sync_dynamic_replies(
         res?;
     }
     Ok(())
+}
+
+/// 从本地数据库读取某条动态的全部评论历史，并重建评论树。
+/// `valid` 只作为展示状态，不作为过滤条件。
+async fn load_local_replies(dynamic_id: &str, connection: &DatabaseConnection) -> Result<Vec<ReplyInfo>> {
+    let rows = reply::Entity::find()
+        .filter(reply::Column::DynamicId.eq(dynamic_id))
+        .order_by_asc(reply::Column::Ctime)
+        .all(connection)
+        .await?;
+
+    let mut replies = HashMap::with_capacity(rows.len());
+    let mut order = Vec::with_capacity(rows.len());
+    for row in rows {
+        let rpid = row.rpid;
+        order.push((rpid, row.parent_rpid));
+        let images = row
+            .images
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default();
+        let raw = row
+            .raw
+            .as_deref()
+            .and_then(|value| serde_json::from_str(value).ok())
+            .unwrap_or(Value::Null);
+        replies.insert(
+            rpid,
+            ReplyInfo {
+                rpid,
+                parent_rpid: row.parent_rpid,
+                uname: row.uname,
+                avatar: row.avatar,
+                content: row.content,
+                images,
+                ctime: row.ctime.and_utc(),
+                valid: row.valid,
+                raw,
+                sub_replies: Vec::new(),
+            },
+        );
+    }
+
+    let mut children: HashMap<i64, Vec<i64>> = HashMap::new();
+    let mut top_level = Vec::new();
+    for (rpid, parent_rpid) in order {
+        if let Some(parent_rpid) = parent_rpid
+            && replies.contains_key(&parent_rpid)
+        {
+            children.entry(parent_rpid).or_default().push(rpid);
+        } else {
+            top_level.push(rpid);
+        }
+    }
+
+    fn attach(
+        rpid: i64,
+        replies: &mut HashMap<i64, ReplyInfo>,
+        children: &HashMap<i64, Vec<i64>>,
+    ) -> Option<ReplyInfo> {
+        let mut reply = replies.remove(&rpid)?;
+        if let Some(child_ids) = children.get(&rpid) {
+            reply.sub_replies = child_ids
+                .iter()
+                .filter_map(|child_id| attach(*child_id, replies, children))
+                .collect();
+        }
+        Some(reply)
+    }
+
+    Ok(top_level
+        .into_iter()
+        .filter_map(|rpid| attach(rpid, &mut replies, &children))
+        .collect())
 }
 
 /// 将评论（含楼中楼）写入数据库
