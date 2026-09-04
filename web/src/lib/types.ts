@@ -313,6 +313,11 @@ export interface DynamicListItem {
 	valid: boolean;
 }
 
+export interface DynamicDynamicsResponse {
+	dynamics: DynamicListItem[];
+	totalCount: number;
+}
+
 export interface ReplyItem {
 	rpid: number;
 	parentRpid: number | null;
@@ -321,6 +326,7 @@ export interface ReplyItem {
 	content: string;
 	images: string[];
 	ctime: string;
+	valid: boolean;
 	subReplies: ReplyItem[];
 }
 

@@ -6,7 +6,7 @@ import type {
 	Config,
 	DashBoardResponse,
 	DynamicDetailResponse,
-	DynamicListItem,
+	DynamicDynamicsResponse,
 	DynamicSourceDetail,
 	DynamicStatsResponse,
 	FavoritesResponse,
@@ -188,8 +188,15 @@ class ApiClient {
 		return this.get<DynamicStatsResponse>(`/dynamic-sources/${id}/stats`);
 	}
 
-	async getDynamicSourceDynamics(id: number): Promise<ApiResponse<DynamicListItem[]>> {
-		return this.get<DynamicListItem[]>(`/dynamic-sources/${id}/dynamics`);
+	async getDynamicSourceDynamics(
+		id: number,
+		page = 0,
+		pageSize = 20
+	): Promise<ApiResponse<DynamicDynamicsResponse>> {
+		return this.get<DynamicDynamicsResponse>(`/dynamic-sources/${id}/dynamics`, {
+			page,
+			page_size: pageSize
+		});
 	}
 
 	async rescanAllReplies(id: number): Promise<ApiResponse<number>> {
@@ -386,7 +393,8 @@ const api = {
 		apiClient.updateDynamicSource(id, request),
 	removeDynamicSource: (id: number) => apiClient.removeDynamicSource(id),
 	getDynamicSourceStats: (id: number) => apiClient.getDynamicSourceStats(id),
-	getDynamicSourceDynamics: (id: number) => apiClient.getDynamicSourceDynamics(id),
+	getDynamicSourceDynamics: (id: number, page?: number, pageSize?: number) =>
+		apiClient.getDynamicSourceDynamics(id, page, pageSize),
 	rescanAllReplies: (id: number) => apiClient.rescanAllReplies(id),
 	rescanSingleReply: (id: number, dynId: string) => apiClient.rescanSingleReply(id, dynId),
 	scanProfile: (id: number) => apiClient.scanProfile(id),

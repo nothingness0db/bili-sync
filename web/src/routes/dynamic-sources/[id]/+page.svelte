@@ -6,6 +6,8 @@
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
+	import Pagination from '$lib/components/pagination.svelte';
 	import * as Chart from '$lib/components/ui/chart/index.js';
 	import MyChartTooltip from '$lib/components/custom/my-chart-tooltip.svelte';
 	import { AreaChart } from 'layerchart';
@@ -33,10 +35,14 @@
 	let sourceId = Number(page.params.id);
 	let stats: DynamicStatsResponse | null = null;
 	let dynamics: DynamicListItem[] = [];
+	let dynamicPage = 0;
+	let dynamicTotalCount = 0;
+	const dynamicPageSize = 20;
 	let loading = false;
 	let rescanningAll = false;
 	let scanningProfile = false;
 	let syncingNow = false;
+	let showSyncWarningDialog = false;
 	let rescanningIds = new SvelteSet<string>();
 	// 时间范围过滤（天），null = 全部
 	let rangeDays: number | null = null;
@@ -132,18 +138,40 @@
 		} satisfies Chart.ChartConfig;
 	}
 
+	function dynamicFileUrl(dynId: string, name: string): string {
+		const token = api.getAuthToken() ?? '';
+		return `/api/dynamic-sources/${sourceId}/dynamics/${dynId}/file?name=${encodeURIComponent(name)}&auth_token=${encodeURIComponent(token)}`;
+	}
+
 	async function loadData() {
 		loading = true;
 		try {
 			const [statsResponse, dynamicsResponse] = await Promise.all([
 				api.getDynamicSourceStats(sourceId),
-				api.getDynamicSourceDynamics(sourceId)
+				api.getDynamicSourceDynamics(sourceId, dynamicPage, dynamicPageSize)
 			]);
 			stats = statsResponse.data;
-			dynamics = dynamicsResponse.data;
+			dynamics = dynamicsResponse.data.dynamics;
+			dynamicTotalCount = dynamicsResponse.data.totalCount;
 			setBreadcrumb([{ label: '动态源', href: '/dynamic-sources' }, { label: stats.upperName }]);
 		} catch (error) {
 			toast.error('加载数据失败', {
+				description: (error as ApiError).message
+			});
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function loadDynamicPage(nextPage: number) {
+		dynamicPage = nextPage;
+		loading = true;
+		try {
+			const response = await api.getDynamicSourceDynamics(sourceId, nextPage, dynamicPageSize);
+			dynamics = response.data.dynamics;
+			dynamicTotalCount = response.data.totalCount;
+		} catch (error) {
+			toast.error('加载动态列表失败', {
 				description: (error as ApiError).message
 			});
 		} finally {
@@ -182,6 +210,11 @@
 		} finally {
 			syncingNow = false;
 		}
+	}
+
+	async function confirmSyncNow() {
+		showSyncWarningDialog = false;
+		await syncNow();
 	}
 
 	async function rescanAll() {
@@ -260,7 +293,7 @@
 			<Button
 				size="sm"
 				variant="outline"
-				onclick={syncNow}
+				onclick={() => (showSyncWarningDialog = true)}
 				disabled={syncingNow}
 				class="flex items-center gap-2"
 			>
@@ -509,6 +542,11 @@
 						</Table.Body>
 					</Table.Root>
 				</div>
+				<Pagination
+					currentPage={dynamicPage}
+					totalPages={Math.ceil(dynamicTotalCount / dynamicPageSize)}
+					onPageChange={loadDynamicPage}
+				/>
 			{:else}
 				<div class="text-muted-foreground py-8 text-center text-sm">暂无动态</div>
 			{/if}
@@ -519,6 +557,25 @@
 			<Button class="mt-4" onclick={loadData}>重新加载</Button>
 		</div>
 	{/if}
+
+	<AlertDialog.Root bind:open={showSyncWarningDialog}>
+		<AlertDialog.Content>
+			<AlertDialog.Header>
+				<AlertDialog.Title>确认立即同步？</AlertDialog.Title>
+				<AlertDialog.Description>
+					这是手动触发操作，会立即执行该动态源的账号数据、动态和评论同步。若当前定时任务也在运行，两个任务可能并发请求
+					B 站接口；请求过于频繁可能触发 B
+					站风控或暂时封控。确认后仍会继续执行，进度可在任务看板和日志中查看。
+				</AlertDialog.Description>
+			</AlertDialog.Header>
+			<AlertDialog.Footer>
+				<AlertDialog.Cancel disabled={syncingNow}>取消</AlertDialog.Cancel>
+				<AlertDialog.Action onclick={confirmSyncNow} disabled={syncingNow}>
+					syncingNow ? '触发中...' : '确认手动同步'}
+				</AlertDialog.Action>
+			</AlertDialog.Footer>
+		</AlertDialog.Content>
+	</AlertDialog.Root>
 
 	<!-- 动态详情对话框：正文 + 评论树 -->
 	<Dialog.Root bind:open={showDetailDialog}>
@@ -566,7 +623,7 @@
 							<div class="flex flex-wrap gap-3">
 								{#each detail.pics as _, i (i)}
 									<img
-										src={`/api/dynamic-sources/${sourceId}/dynamics/${detail.id}/file?name=pics/${String(i + 1).padStart(2, '0')}.jpg`}
+										src={dynamicFileUrl(detail.id, `pics/${String(i + 1).padStart(2, '0')}.jpg`)}
 										alt={`图片 ${i + 1}`}
 										class="max-h-64 max-w-full rounded-lg border object-contain"
 									/>
@@ -614,6 +671,9 @@
 		<div class="min-w-0 flex-1">
 			<div class="flex flex-wrap items-center gap-2 text-xs">
 				<span class="font-medium">{reply.uname}</span>
+				{#if !reply.valid}
+					<Badge variant="secondary" class="text-[10px]">B 站已失效，本地保留</Badge>
+				{/if}
 				<span class="text-muted-foreground">
 					{new Date(reply.ctime).toLocaleString('zh-CN')}
 				</span>
@@ -628,7 +688,7 @@
 				<div class="mt-1 flex flex-wrap gap-2">
 					{#each reply.images as _, i (i)}
 						<img
-							src={`/api/dynamic-sources/${sourceId}/dynamics/${detail!.id}/file?name=comments/${reply.rpid}_${i + 1}.jpg`}
+							src={dynamicFileUrl(detail!.id, `comments/${reply.rpid}_${i + 1}.jpg`)}
 							alt="评论图片"
 							class="h-24 max-w-48 rounded-md border object-cover"
 						/>
