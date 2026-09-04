@@ -47,12 +47,12 @@
 		{ label: '7天', days: 7 }
 	] as const;
 
-	// 筛选后的数据点（按时间范围），模板统一引用
-	const filtered = $derived.by(() => {
+	// 按时间范围过滤数据点（天），null = 全部
+	function filteredStats(): StatPoint[] {
 		if (!stats || rangeDays === null) return stats?.stats ?? [];
 		const cutoff = Date.now() - rangeDays * 24 * 3600 * 1000;
 		return stats.stats.filter((p) => new Date(p.recordedAt).getTime() >= cutoff);
-	});
+	}
 
 	// 动态详情对话框
 	let showDetailDialog = false;
@@ -289,13 +289,13 @@
 							</span>
 						{/if}
 					</div>
-					{#if filtered.length > 1}
+					{#if filteredStats().length > 1}
 						<Chart.Container
 							config={chartConfig(metric.label, metric.color)}
 							class="h-[150px] w-full"
 						>
 							<AreaChart
-								data={buildChartData(filtered, metric.key)}
+								data={buildChartData(filteredStats(), metric.key)}
 								x="time"
 								axis="x"
 								series={[
@@ -317,7 +317,7 @@
 								{/snippet}
 							</AreaChart>
 						</Chart.Container>
-					{:else if filtered.length === 1}
+					{:else if filteredStats().length === 1}
 						<div class="text-muted-foreground flex h-[150px] items-center justify-center text-sm">
 							该时间范围内仅 1 条记录，需至少 2 条才能绘制趋势图
 						</div>
