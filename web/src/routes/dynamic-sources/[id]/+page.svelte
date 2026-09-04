@@ -47,11 +47,28 @@
 		{ label: '7天', days: 7 }
 	] as const;
 
-	// 按时间范围过滤数据点（天），null = 全部
+	// 按时间范围过滤数据点（天），null = 全部；并按天聚合成日粒度
 	function filteredStats(): StatPoint[] {
-		if (!stats || rangeDays === null) return stats?.stats ?? [];
-		const cutoff = Date.now() - rangeDays * 24 * 3600 * 1000;
-		return stats.stats.filter((p) => new Date(p.recordedAt).getTime() >= cutoff);
+		const all = stats?.stats ?? [];
+		let pts = all;
+		if (rangeDays !== null) {
+			const cutoff = Date.now() - rangeDays * 24 * 3600 * 1000;
+			pts = all.filter((p) => new Date(p.recordedAt).getTime() >= cutoff);
+		}
+		const byDay = new Map<string, StatPoint>();
+		for (const p of pts) {
+			const d = new Date(p.recordedAt);
+			byDay.set(`${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`, p);
+		}
+		return [...byDay.values()].sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+	}
+
+	// 图表 x 轴固定为所选时间范围（全部 = 数据范围）
+	function chartXDomain(): [number, number] | undefined {
+		if (rangeDays === null) return undefined;
+		const last = stats?.stats[stats.stats.length - 1];
+		const end = last ? new Date(last.recordedAt).getTime() : Date.now();
+		return [end - rangeDays * 24 * 3600 * 1000, end];
 	}
 
 	// 动态详情对话框
@@ -297,6 +314,7 @@
 							<AreaChart
 								data={buildChartData(filteredStats(), metric.key)}
 								x="time"
+								xDomain={chartXDomain()}
 								axis="x"
 								series={[
 									{
