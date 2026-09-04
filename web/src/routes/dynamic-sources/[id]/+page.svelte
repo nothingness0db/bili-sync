@@ -55,12 +55,12 @@
 			const cutoff = Date.now() - rangeDays * 24 * 3600 * 1000;
 			pts = all.filter((p) => new Date(p.recordedAt).getTime() >= cutoff);
 		}
-		const byDay = new Map<string, StatPoint>();
+		const byDay: Record<string, StatPoint> = {};
 		for (const p of pts) {
 			const d = new Date(p.recordedAt);
-			byDay.set(`${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`, p);
+			byDay[`${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`] = p;
 		}
-		return [...byDay.values()].sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
+		return Object.values(byDay).sort((a, b) => a.recordedAt.localeCompare(b.recordedAt));
 	}
 
 	// 图表 x 轴固定为所选时间范围（全部 = 数据范围）
