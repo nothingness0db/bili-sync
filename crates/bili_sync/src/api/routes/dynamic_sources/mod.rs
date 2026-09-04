@@ -61,13 +61,21 @@ pub async fn get_dynamic_sources_details(
             .count(&db)
             .await?
             .try_into()?;
-        let reply_count = dynamic::Entity::find()
-            .filter(dynamic::Column::SourceId.eq(source.id))
-            .find_with_related(reply::Entity)
-            .all(&db)
-            .await
-            .map(|pairs| pairs.into_iter().map(|(_, r)| r.len()).sum())
-            .unwrap_or(0);
+        let reply_count = reply::Entity::find()
+            .filter(
+                reply::Column::DynamicId.in_subquery(
+                    dynamic::Entity::find()
+                        .filter(dynamic::Column::SourceId.eq(source.id))
+                        .select_only()
+                        .column(dynamic::Column::Id)
+                        .as_query()
+                        .to_owned(),
+                ),
+            )
+            .filter(reply::Column::Valid.eq(true))
+            .count(&db)
+            .await?
+            .try_into()?;
         details.push(DynamicSourceDetail {
             id: source.id,
             upper_id: source.upper_id,
@@ -241,6 +249,8 @@ pub async fn remove_dynamic_source(
     Path(id): Path<i32>,
     Extension(db): Extension<DatabaseConnection>,
 ) -> Result<ApiResponse<bool>, ApiError> {
+    let source_lock = get_source_lock(id);
+    let _source_lock_guard = source_lock.lock().await;
     let Some(source) = dynamic_source::Entity::find_by_id(id).one(&db).await? else {
         return Err(InnerApiError::NotFound(id).into());
     };

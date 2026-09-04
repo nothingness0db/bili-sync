@@ -207,6 +207,7 @@ async fn backfill_missing_replies(source: &dynamic_source::Model, connection: &D
         // 本地已同步的评论数
         let local_count = reply::Entity::find()
             .filter(reply::Column::DynamicId.eq(&dyn_model.id))
+            .filter(reply::Column::Valid.eq(true))
             .count(connection)
             .await? as i64;
         // 本地评论少于 API 评论数（含部分同步）时补拉
@@ -656,6 +657,7 @@ async fn process_dynamic(
         dyn_model.pub_ts.and_utc() + chrono::Duration::days(REPLY_SYNC_WINDOW_DAYS) >= chrono::Utc::now();
     let need_rescan = dyn_model.rescan_reply;
     let mut synced_replies = false;
+    let mut replies_incomplete = false;
     if source.sync_reply && (within_window || need_rescan) {
         info!(
             "动态 {} 本体已处理，评论待扫描{}，开始同步评论..",
@@ -666,7 +668,7 @@ async fn process_dynamic(
                 "（5 天窗口内）"
             }
         );
-        if let Err(e) = sync_dynamic_replies(
+        let reply_sync_result = match sync_dynamic_replies(
             &dyn_model.id,
             dyn_model.comment_type,
             &dyn_model.comment_oid,
@@ -678,32 +680,36 @@ async fn process_dynamic(
         )
         .await
         {
-            // 动态已被删除（-404）：标记无效，停止重试，不影响本体已存档的数据
-            if let Some(BiliError::ErrorResponse { code: -404, .. }) = e.downcast_ref::<BiliError>() {
-                warn!(
-                    "动态 {} 已不存在（可能被 UP 删除），标记为无效，保留本地档案",
-                    dyn_model.id
-                );
-                let mut model: dynamic::ActiveModel = dyn_model.clone().into();
-                model.valid = Set(false);
-                model.rescan_reply = Set(false);
-                model.download_status = Set(STATUS_COMPLETED);
-                model.save(connection).await?;
-                return Ok(());
-            } else if let Some(BiliError::ErrorResponse { code: 12002, .. }) = e.downcast_ref::<BiliError>() {
-                // 评论功能已关闭（12002）：动态仍在但没有评论，按正常完成处理，不再重试
-                warn!("动态 {} 评论功能已关闭（12002），按无评论完成", dyn_model.id);
-                let mut model: dynamic::ActiveModel = dyn_model.clone().into();
-                model.download_status = Set(STATUS_COMPLETED);
-                model.rescan_reply = Set(false);
-                model.path = Set(dir.to_string_lossy().to_string());
-                model.save(connection).await?;
-                return Ok(());
-            } else {
-                return Err(e);
+            Ok(result) => result,
+            Err(e) => {
+                // 动态已被删除（-404）：标记无效，停止重试，不影响本体已存档的数据
+                if let Some(BiliError::ErrorResponse { code: -404, .. }) = e.downcast_ref::<BiliError>() {
+                    warn!(
+                        "动态 {} 已不存在（可能被 UP 删除），标记为无效，保留本地档案",
+                        dyn_model.id
+                    );
+                    let mut model: dynamic::ActiveModel = dyn_model.clone().into();
+                    model.valid = Set(false);
+                    model.rescan_reply = Set(false);
+                    model.download_status = Set(STATUS_COMPLETED);
+                    model.save(connection).await?;
+                    return Ok(());
+                } else if let Some(BiliError::ErrorResponse { code: 12002, .. }) = e.downcast_ref::<BiliError>() {
+                    // 评论功能已关闭（12002）：动态仍在但没有评论，按正常完成处理，不再重试
+                    warn!("动态 {} 评论功能已关闭（12002），按无评论完成", dyn_model.id);
+                    let mut model: dynamic::ActiveModel = dyn_model.clone().into();
+                    model.download_status = Set(STATUS_COMPLETED);
+                    model.rescan_reply = Set(false);
+                    model.path = Set(dir.to_string_lossy().to_string());
+                    model.save(connection).await?;
+                    return Ok(());
+                } else {
+                    return Err(e);
+                }
             }
-        }
-        synced_replies = true;
+        };
+        synced_replies = matches!(reply_sync_result, ReplySyncResult::Complete);
+        replies_incomplete = matches!(reply_sync_result, ReplySyncResult::Incomplete);
         info!(
             "动态 {} 评论同步完成{}",
             dyn_model.id,
@@ -715,12 +721,13 @@ async fn process_dynamic(
     let mut model: dynamic::ActiveModel = dyn_model.into();
     model.download_status = Set(STATUS_COMPLETED);
     model.path = Set(dir.to_string_lossy().to_string());
-    model.rescan_reply = Set(false);
+    model.rescan_reply = Set(replies_incomplete);
     if synced_replies {
         // 回写 stat 快照为实际同步到的评论数，避免补拉逻辑每轮重复标记
         // （快照超过分页封顶或评论被清理时，本地数量永远达不到快照值）
         let local_count = reply::Entity::find()
             .filter(reply::Column::DynamicId.eq(&dyn_id))
+            .filter(reply::Column::Valid.eq(true))
             .count(connection)
             .await? as i64;
         if let Some(mut stat_value) = model.stat.take() {
@@ -740,6 +747,12 @@ async fn process_dynamic(
     Ok(())
 }
 
+enum ReplySyncResult {
+    Skipped,
+    Complete,
+    Incomplete,
+}
+
 /// 拉取动态的评论：存库、导出 JSON/Markdown、下载评论图片
 #[allow(clippy::too_many_arguments)]
 async fn sync_dynamic_replies(
@@ -751,10 +764,10 @@ async fn sync_dynamic_replies(
     reply_api: &Reply<'_>,
     connection: &DatabaseConnection,
     config: &Config,
-) -> Result<()> {
+) -> Result<ReplySyncResult> {
     if comment_type <= 0 || comment_oid.is_empty() {
         warn!("动态 {dynamic_id} 缺少评论信息（comment_type={comment_type}），跳过评论同步");
-        return Ok(());
+        return Ok(ReplySyncResult::Skipped);
     }
     let current_replies = reply_api
         .get_replies(comment_type, comment_oid, MAX_REPLY_PAGES, MAX_SUB_REPLY_PAGES)
@@ -810,7 +823,11 @@ async fn sync_dynamic_replies(
     while let Some(res) = image_stream.next().await {
         res?;
     }
-    Ok(())
+    Ok(if replies_complete {
+        ReplySyncResult::Complete
+    } else {
+        ReplySyncResult::Incomplete
+    })
 }
 
 /// 从本地数据库读取某条动态的全部评论历史，并重建评论树。

@@ -185,6 +185,7 @@ pub async fn get_dynamic_source_dynamics(
     } else {
         reply::Entity::find()
             .filter(reply::Column::DynamicId.is_in(dynamic_ids))
+            .filter(reply::Column::Valid.eq(true))
             .select_only()
             .column(reply::Column::DynamicId)
             .column_as(reply::Column::Rpid.count(), "cnt")
