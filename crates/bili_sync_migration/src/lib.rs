@@ -39,7 +39,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20251009_123713_add_use_dynamic_api::Migration),
             Box::new(m20260324_055217_add_staff::Migration),
             Box::new(m20260712_123205_add_filter_option::Migration),
-Box::new(m20260808_000001_dynamic_sync::Migration),
+            Box::new(m20260808_000001_dynamic_sync::Migration),
             Box::new(m20260808_000002_upper_stat::Migration),
             Box::new(m20260808_000003_add_like_count::Migration),
             Box::new(m20260813_000004_add_dynamic_video_count::Migration),
