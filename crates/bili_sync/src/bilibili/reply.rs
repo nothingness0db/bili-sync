@@ -48,9 +48,11 @@ impl<'a> Reply<'a> {
         oid: &str,
         max_pages: usize,
         max_sub_pages: usize,
-    ) -> Result<Vec<ReplyInfo>> {
+    ) -> Result<(Vec<ReplyInfo>, bool)> {
         let mut all = Vec::new();
         let mut next_offset: Option<Value> = None;
+        let mut complete = true;
+        let mut reached_end = false;
         for _ in 0..max_pages {
             sleep(REPLY_REQUEST_INTERVAL).await;
             let mut req = self
@@ -81,27 +83,35 @@ impl<'a> Reply<'a> {
             let data = res["data"].take();
             let replies = match data["replies"].as_array() {
                 Some(replies) if !replies.is_empty() => replies.clone(),
-                _ => break,
+                _ => {
+                    reached_end = true;
+                    break;
+                }
             };
             for reply in replies.iter() {
                 let mut info = self.parse_reply(reply)?;
-                // 拉取楼中楼回复
-                info.sub_replies = self
+                let (sub_replies, sub_replies_complete) = self
                     .get_sub_replies(comment_type, oid, info.rpid, max_sub_pages)
                     .await
                     .with_context(|| format!("failed to get sub replies of rpid {}", info.rpid))?;
+                complete &= sub_replies_complete;
+                info.sub_replies = sub_replies;
                 all.push(info);
             }
-            // 下一页游标
             match data["cursor"]["pagination_reply"]["next_offset"] {
-                Value::Null => break,
+                Value::Null => {
+                    reached_end = true;
+                    break;
+                }
                 ref offset if offset.is_null() || offset.is_string() && offset.as_str().unwrap_or("").is_empty() => {
+                    reached_end = true;
                     break;
                 }
                 ref offset => next_offset = Some(offset.clone()),
             }
         }
-        Ok(all)
+        complete &= reached_end;
+        Ok((all, complete))
     }
 
     /// 解析单条评论
@@ -149,8 +159,9 @@ impl<'a> Reply<'a> {
         oid: &str,
         root: i64,
         max_pages: usize,
-    ) -> Result<Vec<ReplyInfo>> {
+    ) -> Result<(Vec<ReplyInfo>, bool)> {
         let mut all = Vec::new();
+        let mut reached_end = false;
         for page in 1..=max_pages {
             sleep(REPLY_REQUEST_INTERVAL).await;
             let mut res = self
@@ -178,14 +189,21 @@ impl<'a> Reply<'a> {
             let data = res["data"].take();
             let replies = match data["replies"].as_array() {
                 Some(replies) if !replies.is_empty() => replies.clone(),
-                _ => break,
+                _ => {
+                    reached_end = true;
+                    break;
+                }
             };
+            let page_complete = replies.len() < 20;
             for reply in replies.iter() {
-                let info = self.parse_reply(reply)?;
-                all.push(info);
+                all.push(self.parse_reply(reply)?);
+            }
+            if page_complete {
+                reached_end = true;
+                break;
             }
         }
-        Ok(all)
+        Ok((all, reached_end))
     }
 }
 

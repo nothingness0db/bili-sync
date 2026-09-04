@@ -8,6 +8,7 @@
 	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import Pagination from '$lib/components/pagination.svelte';
+	import AuthenticatedDynamicImage from '$lib/components/authenticated-dynamic-image.svelte';
 	import * as Chart from '$lib/components/ui/chart/index.js';
 	import MyChartTooltip from '$lib/components/custom/my-chart-tooltip.svelte';
 	import { AreaChart } from 'layerchart';
@@ -136,11 +137,6 @@
 				color
 			}
 		} satisfies Chart.ChartConfig;
-	}
-
-	function dynamicFileUrl(dynId: string, name: string): string {
-		const token = api.getAuthToken() ?? '';
-		return `/api/dynamic-sources/${sourceId}/dynamics/${dynId}/file?name=${encodeURIComponent(name)}&auth_token=${encodeURIComponent(token)}`;
 	}
 
 	async function loadData() {
@@ -571,7 +567,7 @@
 			<AlertDialog.Footer>
 				<AlertDialog.Cancel disabled={syncingNow}>取消</AlertDialog.Cancel>
 				<AlertDialog.Action onclick={confirmSyncNow} disabled={syncingNow}>
-					syncingNow ? '触发中...' : '确认手动同步'}
+					{syncingNow ? '触发中...' : '确认手动同步'}
 				</AlertDialog.Action>
 			</AlertDialog.Footer>
 		</AlertDialog.Content>
@@ -621,11 +617,13 @@
 						<div>
 							<div class="mb-2 text-sm font-medium">图片（{detail.pics.length}）</div>
 							<div class="flex flex-wrap gap-3">
-								{#each detail.pics as _, i (i)}
-									<img
-										src={dynamicFileUrl(detail.id, `pics/${String(i + 1).padStart(2, '0')}.jpg`)}
+								{#each detail.pics as _, i (detail.id + '-' + i)}
+									<AuthenticatedDynamicImage
+										{sourceId}
+										dynamicId={detail.id}
+										name={`pics/${String(i + 1).padStart(2, '0')}.jpg`}
 										alt={`图片 ${i + 1}`}
-										class="max-h-64 max-w-full rounded-lg border object-contain"
+										className="max-h-64 max-w-full rounded-lg border object-contain"
 									/>
 								{/each}
 							</div>
@@ -686,11 +684,13 @@
 			</div>
 			{#if reply.images.length > 0}
 				<div class="mt-1 flex flex-wrap gap-2">
-					{#each reply.images as _, i (i)}
-						<img
-							src={dynamicFileUrl(detail!.id, `comments/${reply.rpid}_${i + 1}.jpg`)}
+					{#each reply.images as _, i (detail!.id + '-' + reply.rpid + '-' + i)}
+						<AuthenticatedDynamicImage
+							{sourceId}
+							dynamicId={detail!.id}
+							name={`comments/${reply.rpid}_${i + 1}.jpg`}
 							alt="评论图片"
-							class="h-24 max-w-48 rounded-md border object-cover"
+							className="h-24 max-w-48 rounded-md border object-cover"
 						/>
 					{/each}
 				</div>

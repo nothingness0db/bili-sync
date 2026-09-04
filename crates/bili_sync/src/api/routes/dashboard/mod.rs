@@ -25,7 +25,6 @@ async fn get_task_board(
     Extension(db): Extension<DatabaseConnection>,
 ) -> Result<ApiResponse<TaskBoardResponse>, ApiError> {
     let video_progress = read_video_task_progress();
-    let sync_progress = read_sync_progress();
     let scan = read_scan_task_progress();
     let sources = dynamic_source::Entity::find()
         .filter(dynamic_source::Column::Enabled.eq(true))
@@ -64,7 +63,8 @@ WHERE d.source_id = ? AND d.valid = 1
         } else {
             0
         };
-        let active = sync_progress.source_name == source.upper_name;
+        let sync_progress = read_sync_progress(source.id);
+        let active = !sync_progress.source_name.is_empty();
         // 每条动态处理的大致耗时（秒），用于给等待源和未实测的进行中源兜底估算
         // 依据「重扫评论每轮 5 条 + 任务轮间隔约 20 分钟」≈ 每条 240 秒
         const ESTIMATED_ITEM_SECS: usize = 240;

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use axum::extract::Request;
 use axum::http::HeaderMap;
 use axum::middleware::Next;
@@ -51,18 +49,6 @@ pub async fn auth(mut headers: HeaderMap, request: Request, next: Next) -> Resul
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|s| s == token)
-    {
-        return Ok(next.run(request).await);
-    }
-    // <img> 标签不能设置 Authorization header；动态文件只接受显式携带的 token，
-    // 不再对所有 /file 路径匿名放行。
-    if request.uri().path().ends_with("/file")
-        && request
-            .uri()
-            .query()
-            .and_then(|query| serde_urlencoded::from_str::<HashMap<String, String>>(query).ok())
-            .and_then(|params| params.get("auth_token").cloned())
-            .is_some_and(|value| value == token)
     {
         return Ok(next.run(request).await);
     }

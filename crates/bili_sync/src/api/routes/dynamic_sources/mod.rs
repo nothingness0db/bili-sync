@@ -15,6 +15,7 @@ use crate::api::response::{DynamicSourceDetail, DynamicSourcesResponse};
 use crate::api::wrapper::{ApiError, ApiResponse, ValidatedJson};
 use crate::bilibili::{BiliClient, Submission};
 use crate::config::VersionedConfig;
+use crate::workflow_dynamic::get_source_lock;
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -121,11 +122,18 @@ pub async fn update_dynamic_source(
     Extension(db): Extension<DatabaseConnection>,
     ValidatedJson(request): ValidatedJson<UpdateDynamicSourceRequest>,
 ) -> Result<ApiResponse<bool>, ApiError> {
+    let source_lock = get_source_lock(id);
+    let _source_lock_guard = source_lock.lock().await;
     let Some(model) = dynamic_source::Entity::find_by_id(id).one(&db).await? else {
         return Err(InnerApiError::NotFound(id).into());
     };
     let old_path = PathBuf::from(&model.path);
     let new_path = PathBuf::from(&request.path);
+    if old_path != new_path && new_path.starts_with(&old_path) {
+        return Err(
+            InnerApiError::BadRequest("new path cannot be inside the current dynamic source path".to_string()).into(),
+        );
+    }
     let dynamics = if old_path != new_path {
         dynamic::Entity::find()
             .filter(dynamic::Column::SourceId.eq(id))

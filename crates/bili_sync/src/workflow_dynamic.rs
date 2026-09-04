@@ -33,23 +33,30 @@ pub struct SyncProgress {
     pub eta_seconds: Option<u64>,
 }
 
-static SYNC_PROGRESS: LazyLock<parking_lot::RwLock<SyncProgress>> =
-    LazyLock::new(|| parking_lot::RwLock::new(SyncProgress::default()));
+static SYNC_PROGRESS: LazyLock<parking_lot::RwLock<HashMap<i32, SyncProgress>>> =
+    LazyLock::new(|| parking_lot::RwLock::new(HashMap::new()));
 
-/// 读取当前动态同步进度（看板轮询用）
-pub fn read_sync_progress() -> SyncProgress {
-    SYNC_PROGRESS.read().clone()
+/// 读取指定动态源的同步进度（看板轮询用）
+pub fn read_sync_progress(source_id: i32) -> SyncProgress {
+    SYNC_PROGRESS.read().get(&source_id).cloned().unwrap_or_default()
 }
 
-fn set_sync_progress(progress: SyncProgress) {
-    *SYNC_PROGRESS.write() = progress;
+fn set_sync_progress(source_id: i32, progress: SyncProgress) {
+    let mut progresses = SYNC_PROGRESS.write();
+    if progress.source_name.is_empty() {
+        progresses.remove(&source_id);
+    } else {
+        progresses.insert(source_id, progress);
+    }
 }
 
-struct SyncProgressGuard;
+struct SyncProgressGuard {
+    source_id: i32,
+}
 
 impl Drop for SyncProgressGuard {
     fn drop(&mut self) {
-        set_sync_progress(SyncProgress::default());
+        set_sync_progress(self.source_id, SyncProgress::default());
     }
 }
 
@@ -57,7 +64,7 @@ impl Drop for SyncProgressGuard {
 static SOURCE_LOCKS: LazyLock<StdMutex<HashMap<i32, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(|| StdMutex::new(HashMap::new()));
 
-fn get_source_lock(source_id: i32) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+pub(crate) fn get_source_lock(source_id: i32) -> std::sync::Arc<tokio::sync::Mutex<()>> {
     SOURCE_LOCKS
         .lock()
         .unwrap()
@@ -129,29 +136,35 @@ async fn process_dynamic_source_inner(
     connection: &DatabaseConnection,
     config: &Config,
 ) -> Result<()> {
-    let _progress_guard = SyncProgressGuard;
+    let _progress_guard = SyncProgressGuard { source_id: source.id };
     fs::create_dir_all(&source.path)
         .await
         .with_context(|| format!("failed to create dynamic source directory {}", source.path))?;
     info!("开始处理动态源「{}」..", source.upper_name);
-    set_sync_progress(SyncProgress {
-        source_name: source.upper_name.clone(),
-        phase: "账号快照".to_string(),
-        ..Default::default()
-    });
+    set_sync_progress(
+        source.id,
+        SyncProgress {
+            source_name: source.upper_name.clone(),
+            phase: "账号快照".to_string(),
+            ..Default::default()
+        },
+    );
     // 记录账号信息快照（粉丝/关注/投稿/播放/名字/签名），有变化才插入新记录
     update_upper_stat(&source, bili_client, connection, config).await?;
-    set_sync_progress(SyncProgress {
-        source_name: source.upper_name.clone(),
-        phase: "扫描动态".to_string(),
-        ..Default::default()
-    });
+    set_sync_progress(
+        source.id,
+        SyncProgress {
+            source_name: source.upper_name.clone(),
+            phase: "扫描动态".to_string(),
+            ..Default::default()
+        },
+    );
     refresh_dynamic_source(&source, bili_client, connection, config).await?;
     // 评论补拉：5 天窗口外的历史动态，若 API 评论数 > 0 但本地无评论，自动标记重扫
     backfill_missing_replies(&source, connection).await?;
     process_unhandled_dynamics(&source, bili_client, connection, config).await?;
     info!("处理动态源「{}」完成", source.upper_name);
-    set_sync_progress(SyncProgress::default());
+    set_sync_progress(source.id, SyncProgress::default());
     Ok(())
 }
 
@@ -557,13 +570,16 @@ async fn process_unhandled_dynamics(
         let item_start = Instant::now();
         let dyn_id = dyn_model.id.clone();
         let eta_seconds = avg_item_secs.map(|avg| ((total - idx - 1) as f64 * avg).ceil() as u64);
-        set_sync_progress(SyncProgress {
-            source_name: source.upper_name.clone(),
-            phase: "评论同步".to_string(),
-            current: idx + 1,
-            total,
-            eta_seconds,
-        });
+        set_sync_progress(
+            source.id,
+            SyncProgress {
+                source_name: source.upper_name.clone(),
+                phase: "评论同步".to_string(),
+                current: idx + 1,
+                total,
+                eta_seconds,
+            },
+        );
         info!(
             "开始处理「{}」第 {}/{} 条动态 {}..",
             source.upper_name,
@@ -744,8 +760,23 @@ async fn sync_dynamic_replies(
         .get_replies(comment_type, comment_oid, MAX_REPLY_PAGES, MAX_SUB_REPLY_PAGES)
         .await
         .with_context(|| format!("failed to get replies of dynamic {dynamic_id}"))?;
-    // 写入数据库；已有 valid=false 的历史评论不会被删除或重新标记。
+    // 只有完整走到评论末页时，才能安全地把本地缺失评论标记为失效。
+    let (current_replies, replies_complete) = current_replies;
     save_replies(dynamic_id, &current_replies, connection).await?;
+    if replies_complete {
+        let current_ids = current_replies
+            .iter()
+            .flat_map(|reply| std::iter::once(reply.rpid).chain(reply.sub_replies.iter().map(|sub| sub.rpid)))
+            .collect::<Vec<_>>();
+        let mut query = reply::Entity::update_many().filter(reply::Column::DynamicId.eq(dynamic_id));
+        if !current_ids.is_empty() {
+            query = query.filter(reply::Column::Rpid.is_not_in(current_ids));
+        }
+        query
+            .col_expr(reply::Column::Valid, Expr::value(false))
+            .exec(connection)
+            .await?;
+    }
     // 从本地数据库导出完整历史，而不是用 B 站本轮返回结果覆盖历史评论。
     let local_replies = load_local_replies(dynamic_id, connection).await?;
     // 导出 JSON / Markdown
@@ -881,6 +912,7 @@ async fn save_replies(dynamic_id: &str, replies: &[ReplyInfo], connection: &Data
                         reply::Column::Images,
                         reply::Column::Ctime,
                         reply::Column::Raw,
+                        reply::Column::Valid,
                     ])
                     .to_owned(),
             )
