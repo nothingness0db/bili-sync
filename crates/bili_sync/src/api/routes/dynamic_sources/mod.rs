@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path as FsPath, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use axum::Router;
 use axum::extract::{Extension, Path};
 use axum::routing::{get, put};
@@ -117,14 +117,39 @@ pub async fn insert_dynamic_source(
     Ok(ApiResponse::ok(true))
 }
 
-/// 回滚已完成的动态目录迁移；失败时尽力恢复文件系统状态。
-async fn rollback_moved_dynamic_dirs(moved: &[(PathBuf, PathBuf)]) {
-    for (old_dir, new_dir) in moved.iter().rev() {
-        let _ = tokio::fs::rename(new_dir, old_dir).await;
+/// 复制动态目录，避免在数据库事务提交前破坏旧目录。
+async fn copy_dynamic_dir(source: &FsPath, target: &FsPath) -> Result<()> {
+    tokio::fs::create_dir_all(target).await?;
+    let mut entries = tokio::fs::read_dir(source).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let file_type = entry.file_type().await?;
+        if file_type.is_dir() {
+            Box::pin(copy_dynamic_dir(&source_path, &target_path)).await?;
+        } else if file_type.is_file() {
+            tokio::fs::copy(&source_path, &target_path).await?;
+        } else {
+            bail!("unsupported file type in dynamic directory {}", source_path.display());
+        }
+    }
+    Ok(())
+}
+
+/// 删除事务失败时创建的新目录；旧目录仍保留，数据库路径因此仍然有效。
+async fn cleanup_copied_dynamic_dirs(copied: &[(PathBuf, PathBuf)]) {
+    for (_, new_dir) in copied.iter().rev() {
+        if let Err(error) = tokio::fs::remove_dir_all(new_dir).await {
+            tracing::warn!(
+                path = %new_dir.display(),
+                %error,
+                "清理动态目录副本失败，保留副本以便后续人工处理"
+            );
+        }
     }
 }
 
-/// 更新动态源；修改保存路径时同步迁移已有动态目录并更新数据库中的路径。
+/// 更新动态源；修改保存路径时先复制已有动态目录，再提交数据库路径变更。
 pub async fn update_dynamic_source(
     Path(id): Path<i32>,
     Extension(db): Extension<DatabaseConnection>,
@@ -151,7 +176,7 @@ pub async fn update_dynamic_source(
         Vec::new()
     };
 
-    let mut moved = Vec::new();
+    let mut copied = Vec::new();
     if old_path != new_path {
         tokio::fs::create_dir_all(&new_path)
             .await
@@ -171,14 +196,14 @@ pub async fn update_dynamic_source(
             let target_exists = match tokio::fs::try_exists(&new_dir).await {
                 Ok(exists) => exists,
                 Err(error) => {
-                    rollback_moved_dynamic_dirs(&moved).await;
+                    cleanup_copied_dynamic_dirs(&copied).await;
                     return Err(anyhow::Error::from(error)
                         .context(format!("failed to inspect target directory {}", new_dir.display()))
                         .into());
                 }
             };
             if target_exists {
-                rollback_moved_dynamic_dirs(&moved).await;
+                cleanup_copied_dynamic_dirs(&copied).await;
                 return Err(anyhow::anyhow!(
                     "cannot migrate dynamic {}: target directory {} already exists",
                     dyn_model.id,
@@ -189,20 +214,27 @@ pub async fn update_dynamic_source(
             let source_exists = match tokio::fs::try_exists(&old_dir).await {
                 Ok(exists) => exists,
                 Err(error) => {
-                    rollback_moved_dynamic_dirs(&moved).await;
+                    cleanup_copied_dynamic_dirs(&copied).await;
                     return Err(anyhow::Error::from(error)
                         .context(format!("failed to inspect source directory {}", old_dir.display()))
                         .into());
                 }
             };
             if source_exists {
-                if let Err(error) = tokio::fs::rename(&old_dir, &new_dir).await {
-                    rollback_moved_dynamic_dirs(&moved).await;
-                    return Err(anyhow::Error::from(error)
-                        .context(format!("failed to move {} to {}", old_dir.display(), new_dir.display()))
+                if let Err(error) = copy_dynamic_dir(&old_dir, &new_dir).await {
+                    cleanup_copied_dynamic_dirs(&copied).await;
+                    if let Err(cleanup_error) = tokio::fs::remove_dir_all(&new_dir).await {
+                        tracing::warn!(
+                            path = %new_dir.display(),
+                            %cleanup_error,
+                            "清理复制失败的动态目录副本失败"
+                        );
+                    }
+                    return Err(error
+                        .context(format!("failed to copy {} to {}", old_dir.display(), new_dir.display()))
                         .into());
                 }
-                moved.push((old_dir, new_dir));
+                copied.push((old_dir, new_dir));
             }
         }
     }
@@ -210,7 +242,7 @@ pub async fn update_dynamic_source(
     let txn = match db.begin().await {
         Ok(txn) => txn,
         Err(error) => {
-            rollback_moved_dynamic_dirs(&moved).await;
+            cleanup_copied_dynamic_dirs(&copied).await;
             return Err(error.into());
         }
     };
@@ -236,10 +268,19 @@ pub async fn update_dynamic_source(
     }
     .await;
     if let Err(error) = result {
-        for (from, to) in moved.into_iter().rev() {
-            let _ = tokio::fs::rename(&to, &from).await;
-        }
+        cleanup_copied_dynamic_dirs(&copied).await;
         return Err(error.into());
+    }
+
+    // 新目录已完整复制且数据库已提交；旧目录现在只是冗余副本。
+    for (old_dir, _) in copied {
+        if let Err(error) = tokio::fs::remove_dir_all(&old_dir).await {
+            tracing::warn!(
+                path = %old_dir.display(),
+                %error,
+                "删除旧动态目录失败，数据库已切换到新目录"
+            );
+        }
     }
     Ok(ApiResponse::ok(true))
 }

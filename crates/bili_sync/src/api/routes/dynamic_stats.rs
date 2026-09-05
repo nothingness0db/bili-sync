@@ -303,14 +303,14 @@ pub async fn sync_now(
     Extension(db): Extension<DatabaseConnection>,
     Extension(bili_client): Extension<Arc<BiliClient>>,
 ) -> Result<ApiResponse<bool>, ApiError> {
-    let Some(source) = dynamic_source::Entity::find_by_id(id).one(&db).await? else {
+    let Some(_) = dynamic_source::Entity::find_by_id(id).one(&db).await? else {
         return Err(InnerApiError::NotFound(id).into());
     };
     let connection = db.clone();
     tokio::spawn(async move {
         let config = VersionedConfig::get().snapshot();
         // 排队执行：等待该源正在进行的同步结束后再跑，不跳过
-        match process_dynamic_source_queued(source, &bili_client, &connection, &config).await {
+        match process_dynamic_source_queued(id, &bili_client, &connection, &config).await {
             Ok(()) => info!("手动触发的动态同步完成"),
             Err(e) => error!("手动触发的动态同步失败：{:#}", e),
         }

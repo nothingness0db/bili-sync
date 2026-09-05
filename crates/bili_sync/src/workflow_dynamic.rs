@@ -118,15 +118,20 @@ pub async fn process_dynamic_source(
 
 /// 完整地处理某个动态源，手动触发专用：等待该源正在进行的同步结束后再执行（排队语义）
 pub async fn process_dynamic_source_queued(
-    source: dynamic_source::Model,
+    source_id: i32,
     bili_client: &BiliClient,
     connection: &DatabaseConnection,
     config: &Config,
 ) -> Result<()> {
     ensure_mixin_key(bili_client, &config.credential).await?;
-    // 手动触发排队：等待该源当前任务结束，不跳过
-    let lock = get_source_lock(source.id);
+    // 手动触发排队：等待该源当前任务结束，不跳过。
+    // 必须在拿到锁后重新读取 source，避免路径更新与手动同步之间使用旧快照。
+    let lock = get_source_lock(source_id);
     let _guard = lock.lock().await;
+    let source = dynamic_source::Entity::find_by_id(source_id)
+        .one(connection)
+        .await?
+        .with_context(|| format!("dynamic source {source_id} no longer exists"))?;
     process_dynamic_source_inner(source, bili_client, connection, config).await
 }
 
