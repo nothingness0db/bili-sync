@@ -26,7 +26,7 @@ use crate::utils::status::STATUS_COMPLETED;
 #[derive(Clone, Default)]
 pub struct SyncProgress {
     pub source_name: String,
-    /// 当前阶段：账号快照 / 扫描动态 / 评论同步
+    /// 当前阶段：账号快照 / 扫描动态 / 视频统计 / 评论同步 / 评论续抓
     pub phase: String,
     pub current: usize,
     pub total: usize,

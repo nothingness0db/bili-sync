@@ -65,7 +65,7 @@ WHERE d.source_id = ? AND d.valid = 1 AND d.reply_synced_at IS NULL
         };
         let sync_progress = read_sync_progress(source.id);
         let active = !sync_progress.source_name.is_empty();
-        // 每条动态处理的大致耗时（秒），用于给等待源和未实测的进行中源兜底估算
+        // 每条动态处理的大致耗时（秒），仅用于等待源和评论处理阶段兜底估算
         // 依据「重扫评论每轮 5 条 + 任务轮间隔约 20 分钟」≈ 每条 240 秒
         const ESTIMATED_ITEM_SECS: usize = 240;
         let (phase, current, total, eta_seconds) = if active {
@@ -74,6 +74,9 @@ WHERE d.source_id = ? AND d.valid = 1 AND d.reply_synced_at IS NULL
                 sync_progress.current,
                 sync_progress.total,
                 sync_progress.eta_seconds.or_else(|| {
+                    if !matches!(sync_progress.phase.as_str(), "评论同步" | "评论续抓") {
+                        return None;
+                    }
                     // 本轮刚开始、尚未有实测数据时按固定估算
                     sync_progress
                         .total
