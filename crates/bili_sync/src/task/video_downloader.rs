@@ -390,6 +390,7 @@ async fn download_video(
         warn!("没有可用的视频源");
     }
     let total_video_sources = video_sources.len();
+    let sampling_started_at = chrono::Utc::now();
     for (idx, video_source) in video_sources.into_iter().enumerate() {
         let display_name = video_source.display_name();
         set_video_task_progress(VideoTaskProgress {
@@ -398,7 +399,16 @@ async fn download_video(
             current_source_index: idx + 1,
             total_sources: total_video_sources,
         });
-        if let Err(e) = process_video_source(video_source, &bili_client, connection, &template, config).await {
+        if let Err(e) = process_video_source(
+            video_source,
+            &bili_client,
+            connection,
+            &template,
+            config,
+            sampling_started_at,
+        )
+        .await
+        {
             error_and_notify(
                 config,
                 &bili_client,

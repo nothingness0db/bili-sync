@@ -20,6 +20,9 @@ mod m20260813_000005_add_total_video_count;
 mod m20260813_000006_add_video_deleted_at;
 mod m20260821_025000_mark_empty_tags_for_refetch;
 mod m20260823_000001_add_danmaku_last_synced_at;
+mod m20261008_000001_add_reply_sync_progress;
+mod m20261008_000002_video_stat;
+mod m20261008_000003_elec_stat;
 
 pub struct Migrator;
 
@@ -47,6 +50,9 @@ impl MigratorTrait for Migrator {
             Box::new(m20260813_000006_add_video_deleted_at::Migration),
             Box::new(m20260821_025000_mark_empty_tags_for_refetch::Migration),
             Box::new(m20260823_000001_add_danmaku_last_synced_at::Migration),
+            Box::new(m20261008_000001_add_reply_sync_progress::Migration),
+            Box::new(m20261008_000002_video_stat::Migration),
+            Box::new(m20261008_000003_elec_stat::Migration),
         ]
     }
 }

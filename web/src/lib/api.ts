@@ -9,6 +9,7 @@ import type {
 	DynamicDynamicsResponse,
 	DynamicSourceDetail,
 	DynamicStatsResponse,
+	ElecStatsResponse,
 	FavoritesResponse,
 	FullSyncVideoSourceRequest,
 	FullSyncVideoSourceResponse,
@@ -39,7 +40,9 @@ import type {
 	VideoSourcesDetailsResponse,
 	VideoSourcesResponse,
 	VideosRequest,
-	VideosResponse
+	VideosResponse,
+	VideoStatListResponse,
+	VideoStatsResponse
 } from './types';
 import { wsManager } from './ws';
 
@@ -48,6 +51,35 @@ const API_BASE_URL = '/api';
 
 // HTTP 客户端类
 class ApiClient {
+	getElecStats(
+		sourceId: number,
+		page: number,
+		days: number | null
+	): Promise<ApiResponse<ElecStatsResponse>> {
+		return this.request(`/dynamic-sources/${sourceId}/elec-stats`, 'GET', undefined, {
+			page,
+			page_size: 20,
+			days
+		});
+	}
+	getVideoStats(
+		bvid: string,
+		days: number | null = null
+	): Promise<ApiResponse<VideoStatsResponse>> {
+		return this.request(`/video-stats/${encodeURIComponent(bvid)}`, 'GET', undefined, { days });
+	}
+
+	getSourceVideoStats(
+		sourceId: number,
+		page: number,
+		days: number | null
+	): Promise<ApiResponse<VideoStatListResponse>> {
+		return this.request(`/dynamic-sources/${sourceId}/videos`, 'GET', undefined, {
+			page,
+			page_size: 20,
+			days
+		});
+	}
 	private baseURL: string;
 	private defaultHeaders: Record<string, string>;
 
@@ -385,6 +417,11 @@ export const apiClient = new ApiClient();
 
 // 导出 API 方法的便捷函数
 const api = {
+	getElecStats: (sourceId: number, page: number, days: number | null) =>
+		apiClient.getElecStats(sourceId, page, days),
+	getVideoStats: (bvid: string, days: number | null = null) => apiClient.getVideoStats(bvid, days),
+	getSourceVideoStats: (sourceId: number, page: number, days: number | null) =>
+		apiClient.getSourceVideoStats(sourceId, page, days),
 	getVideoSources: () => apiClient.getVideoSources(),
 	getDynamicSources: () => apiClient.getDynamicSources(),
 	insertDynamicSource: (request: InsertDynamicSourceRequest) =>

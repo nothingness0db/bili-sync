@@ -23,7 +23,7 @@ impl BiliError {
         matches!(
             self,
             BiliError::RiskControlOccurred(_) | BiliError::VideoStreamsEmpty | BiliError::InvalidStatusCode(_, _)
-        )
+        ) || matches!(self, BiliError::ErrorResponse { code: -403, .. })
     }
 
     pub fn is_common_error(&self) -> bool {
@@ -41,5 +41,20 @@ impl BiliError {
     /// 注意 62002「稿件不可见」（审核中/锁定/退回）不算删除，调用方应继续跳过
     pub fn is_video_not_found(&self) -> bool {
         matches!(self, BiliError::ErrorResponse { code, .. } if *code == -404 || *code == 62012)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bilibili::Validate;
+
+    #[test]
+    fn json_access_denied_stops_the_round_like_http_access_denied() {
+        // B 站也会通过 HTTP 200 的 JSON code 返回访问受限，不能继续请求后面的源。
+        let error = serde_json::json!({"code": -403, "message": "访问权限不足"})
+            .validate()
+            .unwrap_err();
+        assert!(error.downcast_ref::<BiliError>().unwrap().is_risk_control_related());
     }
 }

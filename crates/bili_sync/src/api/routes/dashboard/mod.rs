@@ -51,7 +51,7 @@ async fn get_task_board(
 SELECT COALESCE(SUM(CAST(json_extract(d.stat,'$.comment.count') AS INTEGER) - COALESCE(rc.cnt, 0)), 0) AS gap
 FROM dynamic d
 LEFT JOIN (SELECT dynamic_id, COUNT(*) AS cnt FROM reply WHERE valid = 1 GROUP BY dynamic_id) rc ON rc.dynamic_id = d.id
-WHERE d.source_id = ? AND d.valid = 1
+WHERE d.source_id = ? AND d.valid = 1 AND d.reply_synced_at IS NULL
   AND CAST(json_extract(d.stat,'$.comment.count') AS INTEGER) > COALESCE(rc.cnt, 0)
 "#,
                 [source.id.into()],

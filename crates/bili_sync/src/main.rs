@@ -7,10 +7,12 @@ mod bilibili;
 mod config;
 mod database;
 mod downloader;
+mod elec_stats;
 mod error;
 mod notifier;
 mod task;
 mod utils;
+mod video_stats;
 mod workflow;
 mod workflow_dynamic;
 

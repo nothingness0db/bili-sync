@@ -14,10 +14,12 @@ mod config;
 mod dashboard;
 mod dynamic_sources;
 mod dynamic_stats;
+mod elec_stats;
 mod login;
 mod me;
 mod task;
 mod video_sources;
+mod video_stats;
 mod videos;
 mod ws;
 
@@ -33,7 +35,9 @@ pub fn router() -> Router {
             .merge(video_sources::router())
             .merge(dynamic_sources::router())
             .merge(dynamic_stats::router())
+            .merge(elec_stats::router())
             .merge(videos::router())
+            .merge(video_stats::router())
             .merge(dashboard::router())
             .merge(ws::router())
             .merge(task::router())

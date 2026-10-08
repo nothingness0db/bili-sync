@@ -32,9 +32,12 @@
 		StatPoint
 	} from '$lib/types';
 	import api from '$lib/api';
+	import SourceVideoStats from '$lib/components/source-video-stats.svelte';
+	import SourceElecStats from '$lib/components/source-elec-stats.svelte';
 
 	let sourceId = Number(page.params.id);
 	let stats: DynamicStatsResponse | null = null;
+	let statsRevision = 0;
 	let dynamics: DynamicListItem[] = [];
 	let dynamicPage = 0;
 	let dynamicTotalCount = 0;
@@ -147,6 +150,7 @@
 				api.getDynamicSourceDynamics(sourceId, dynamicPage, dynamicPageSize)
 			]);
 			stats = statsResponse.data;
+			statsRevision += 1;
 			dynamics = dynamicsResponse.data.dynamics;
 			dynamicTotalCount = dynamicsResponse.data.totalCount;
 			setBreadcrumb([{ label: '动态源', href: '/dynamic-sources' }, { label: stats.upperName }]);
@@ -180,7 +184,7 @@
 		try {
 			await api.scanProfile(sourceId);
 			toast.success('扫描完成', {
-				description: '账号数据已刷新（有变化才会生成新记录）'
+				description: '已刷新可用的账号、视频和充电榜数据'
 			});
 			await loadData();
 		} catch (error) {
@@ -249,6 +253,8 @@
 
 	onMount(() => {
 		loadData();
+		const dynamicId = page.url.searchParams.get('dynamic');
+		if (dynamicId) void openDetail(dynamicId);
 	});
 </script>
 
@@ -263,7 +269,7 @@
 		</div>
 	{:else if stats}
 		<!-- 账号信息 -->
-		<div class="flex items-center justify-between gap-4">
+		<div class="flex flex-wrap items-center justify-between gap-4">
 			<div class="flex items-center gap-4">
 				{#if stats.versions.length > 0}
 					<img
@@ -286,6 +292,7 @@
 					</div>
 				</div>
 			</div>
+			<Button size="sm" variant="outline" href="#elec-stats">充电榜</Button>
 			<Button
 				size="sm"
 				variant="outline"
@@ -417,6 +424,9 @@
 		</div>
 
 		<!-- 动态列表（手动重扫评论） -->
+		<SourceElecStats {sourceId} refreshKey={statsRevision} />
+		<SourceVideoStats {sourceId} refreshKey={statsRevision} />
+
 		<div class="rounded-lg border p-4">
 			<div class="mb-3 flex items-center justify-between">
 				<div class="flex items-center gap-2">
@@ -477,18 +487,18 @@
 										{:else if dyn.rescanReply}
 											<Badge class="flex w-fit items-center gap-1.5 bg-amber-600 text-amber-50">
 												<RefreshCwIcon class="h-3 w-3" />
-												等待重扫
+												{dyn.replySyncStarted ? '等待续抓' : '等待重扫'}
 											</Badge>
 										{:else if !dyn.path}
 											<Badge class="flex w-fit items-center gap-1.5 bg-rose-700 text-rose-100">
 												待处理
 											</Badge>
-										{:else if dyn.commentCount > 0 && dyn.replyCount === 0}
+										{:else if !dyn.replySyncedAt && dyn.commentCount > 0 && dyn.replyCount === 0}
 											<Badge class="flex w-fit items-center gap-1.5 bg-amber-600 text-amber-50">
 												<RefreshCwIcon class="h-3 w-3" />
 												评论待补拉
 											</Badge>
-										{:else if dyn.commentCount > 0 && dyn.replyCount < dyn.commentCount}
+										{:else if !dyn.replySyncedAt && dyn.commentCount > 0 && dyn.replyCount < dyn.commentCount}
 											<Badge variant="secondary" class="flex w-fit items-center gap-1.5">
 												评论部分同步（{dyn.replyCount}/{dyn.commentCount}）
 											</Badge>

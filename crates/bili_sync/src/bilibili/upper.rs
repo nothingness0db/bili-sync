@@ -32,6 +32,29 @@ impl<'a> UpperInfo<'a> {
         }
     }
 
+    /// 账号充电展示信息，沿用现有 Cookie、WBI 签名与全局请求限流。
+    pub async fn get_elec_info(&self) -> Result<Value> {
+        self.client
+            .request(
+                Method::GET,
+                "https://api.bilibili.com/x/space/wbi/acc/info",
+                self.credential,
+            )
+            .await
+            .query(&[
+                ("mid", self.upper_id.as_str()),
+                ("platform", "web"),
+                ("web_location", "1550101"),
+            ])
+            .wbi_sign(MIXIN_KEY.load().as_deref())?
+            .send()
+            .await?
+            .error_for_status_ext()?
+            .json::<Value>()
+            .await?
+            .validate()
+    }
+
     /// 获取 UP 主账号信息：名字、签名、头像、粉丝数、关注数、投稿数、总播放数、总获赞数
     pub async fn get_profile(&self) -> Result<UpperProfile> {
         let (card, upstat, arc_search) = tokio::try_join!(self.get_card(), self.get_upstat(), self.get_arc_search())?;

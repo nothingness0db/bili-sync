@@ -69,6 +69,9 @@ pub struct DynamicListItem {
     pub rescan_reply: bool,
     pub path: String,
     pub valid: bool,
+    /// 是否已有分页断点（区分首次重扫与断点续抓）
+    pub reply_sync_started: bool,
+    pub reply_synced_at: Option<DateTime>,
 }
 
 #[derive(Serialize)]

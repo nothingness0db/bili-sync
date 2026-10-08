@@ -12,6 +12,7 @@
 	import { setBreadcrumb } from '$lib/stores/breadcrumb';
 	import { appStateStore, ToQuery } from '$lib/stores/filter';
 	import VideoCard from '$lib/components/video-card.svelte';
+	import VideoStatsPanel from '$lib/components/video-stats-panel.svelte';
 	import StatusEditor from '$lib/components/status-editor.svelte';
 	import { toast } from 'svelte-sonner';
 
@@ -227,6 +228,8 @@
 			/>
 		</div>
 	</section>
+
+	<VideoStatsPanel bvid={videoData.video.bvid} />
 
 	<section>
 		{#if videoData.pages && videoData.pages.length > 0}

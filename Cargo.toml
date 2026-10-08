@@ -68,7 +68,7 @@ sea-orm = { version = "1.1.20", features = [
     "sqlx-sqlite",
     "sqlite-use-returning-for-3_35",
 ] }
-sea-orm-migration = { version = "1.1.20", features = [] }
+sea-orm-migration = { version = "1.1.20", features = ["sqlx-sqlite"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 serde_urlencoded = "0.7.1"

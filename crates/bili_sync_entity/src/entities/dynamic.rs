@@ -8,6 +8,8 @@ pub struct Model {
     /// 动态 id（id_str）
     #[sea_orm(primary_key)]
     pub id: String,
+    /// AV 动态关联的视频，便于与 video_stat 和评论按 BV 号查询。
+    pub video_bvid: Option<String>,
     pub source_id: i32,
     /// 动态类型，如 DYNAMIC_TYPE_AV / DYNAMIC_TYPE_DRAW / DYNAMIC_TYPE_COMMON_SQUARE / DYNAMIC_TYPE_FORWARD
     pub dyn_type: String,
@@ -31,6 +33,12 @@ pub struct Model {
     pub valid: bool,
     /// 手动标记重新同步评论
     pub rescan_reply: bool,
+    /// 评论分页断点（顶级游标、待处理楼中楼和本次扫描见过的评论 id）
+    pub reply_sync_state: Option<Json>,
+    /// 最近一次尝试同步评论的时间，用于重扫队列轮转
+    pub reply_last_attempt_at: Option<DateTime>,
+    /// 最近一次完整同步或确认评论关闭的时间
+    pub reply_synced_at: Option<DateTime>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

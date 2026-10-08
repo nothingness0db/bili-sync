@@ -16,11 +16,11 @@ pub use error::BiliError;
 pub use favorite_list::FavoriteList;
 pub use me::Me;
 use once_cell::sync::Lazy;
-pub use reply::{Reply, ReplyInfo};
+pub use reply::{Reply, ReplyInfo, ReplySyncState};
 use reqwest::{RequestBuilder, StatusCode};
 pub use submission::Submission;
 pub use upper::UpperInfo;
-pub use video::{Dimension, PageInfo, Video};
+pub use video::{Dimension, PageInfo, Video, VideoCounters};
 pub use watch_later::WatchLater;
 
 mod analyzer;
@@ -138,6 +138,10 @@ fn sign_request(req: &mut reqwest::Request, mixin_key: &str, timestamp: i64) -> 
 pub enum VideoInfo {
     /// 从视频详情接口获取的视频信息
     Detail {
+        #[serde(default)]
+        aid: Option<i64>,
+        #[serde(default)]
+        stat: Option<VideoCounters>,
         title: String,
         bvid: String,
         #[serde(rename = "desc")]

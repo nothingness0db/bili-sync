@@ -211,6 +211,8 @@ pub async fn get_dynamic_source_dynamics(
                 .unwrap_or(0),
             reply_count: reply_counts.get(&d.id).copied().unwrap_or(0),
             rescan_reply: d.rescan_reply,
+            reply_sync_started: d.reply_sync_state.is_some(),
+            reply_synced_at: d.reply_synced_at,
             path: d.path,
             valid: d.valid,
         })
@@ -326,6 +328,10 @@ pub async fn rescan_all_replies(
     let Some(source) = dynamic_source::Entity::find_by_id(id).one(&db).await? else {
         return Err(InnerApiError::NotFound(id).into());
     };
+    let lock = crate::workflow_dynamic::get_source_lock(source.id);
+    let _guard = lock
+        .try_lock()
+        .map_err(|_| InnerApiError::BadRequest("该动态源正在同步，请待本轮完成后重试重扫评论".into()))?;
     let dynamics = dynamic::Entity::find()
         .filter(dynamic::Column::SourceId.eq(source.id))
         .all(&db)
@@ -334,7 +340,9 @@ pub async fn rescan_all_replies(
     for dyn_model in dynamics {
         let mut model: dynamic::ActiveModel = dyn_model.into();
         model.rescan_reply = Set(true);
-        model.download_status = Set(0);
+        model.reply_sync_state = Set(None);
+        model.reply_last_attempt_at = Set(None);
+        model.reply_synced_at = Set(None);
         model.save(&db).await?;
     }
     Ok(ApiResponse::ok(count))
@@ -348,6 +356,10 @@ pub async fn rescan_single_reply(
     let Some(source) = dynamic_source::Entity::find_by_id(id).one(&db).await? else {
         return Err(InnerApiError::NotFound(id).into());
     };
+    let lock = crate::workflow_dynamic::get_source_lock(source.id);
+    let _guard = lock
+        .try_lock()
+        .map_err(|_| InnerApiError::BadRequest("该动态源正在同步，请待本轮完成后重试重扫评论".into()))?;
     let Some(dyn_model) = dynamic::Entity::find_by_id(&dyn_id).one(&db).await? else {
         return Err(InnerApiError::NotFound(id).into());
     };
@@ -356,7 +368,94 @@ pub async fn rescan_single_reply(
     }
     let mut model: dynamic::ActiveModel = dyn_model.into();
     model.rescan_reply = Set(true);
-    model.download_status = Set(0);
+    model.reply_sync_state = Set(None);
+    model.reply_last_attempt_at = Set(None);
+    model.reply_synced_at = Set(None);
     model.save(&db).await?;
     Ok(ApiResponse::ok(true))
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::response::IntoResponse;
+    use bili_sync_migration::{Migrator, MigratorTrait};
+    use sea_orm::{ConnectOptions, Database};
+    use serde_json::json;
+    use tokio::time::{Duration, timeout};
+
+    use super::*;
+    use crate::utils::status::STATUS_COMPLETED;
+
+    #[tokio::test]
+    async fn rescan_rejects_busy_source_without_waiting_or_overwriting_checkpoint() -> Result<()> {
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(1).sqlx_logging(false);
+        let db = Database::connect(options).await?;
+        Migrator::up(&db, None).await?;
+        let now = chrono::Utc::now().naive_utc();
+        let source = dynamic_source::ActiveModel {
+            id: Set(1_000_000),
+            upper_id: Set(123),
+            upper_name: Set("test".into()),
+            path: Set(String::new()),
+            created_at: Set(now),
+            latest_dyn_at: Set(now),
+            sync_reply: Set(true),
+            enabled: Set(true),
+        }
+        .insert(&db)
+        .await?;
+        let checkpoint = json!({"next_offset": "keep-this-page"});
+        let model = dynamic::Model {
+            id: "busy-source".into(),
+            source_id: source.id,
+            download_status: STATUS_COMPLETED,
+            rescan_reply: true,
+            reply_sync_state: Some(checkpoint.clone()),
+            reply_last_attempt_at: Some(now),
+            reply_synced_at: Some(now),
+            ..Default::default()
+        };
+        let active: dynamic::ActiveModel = model.into();
+        let model = active.reset_all().insert(&db).await?;
+        let lock = crate::workflow_dynamic::get_source_lock(source.id);
+        let guard = lock.lock().await;
+        let all = timeout(
+            Duration::from_secs(1),
+            rescan_all_replies(Path(source.id), Extension(db.clone())),
+        )
+        .await
+        .expect("rescan-all must not wait for the running sync");
+        let single = timeout(
+            Duration::from_secs(1),
+            rescan_single_reply(Path((source.id, model.id.clone())), Extension(db.clone())),
+        )
+        .await
+        .expect("rescan-single must not wait for the running sync");
+        let Err(error) = all else {
+            panic!("rescan-all should reject a busy source");
+        };
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+        let Err(error) = single else {
+            panic!("rescan-single should reject a busy source");
+        };
+        assert_eq!(error.into_response().status(), StatusCode::BAD_REQUEST);
+        let unchanged = dynamic::Entity::find_by_id(&model.id).one(&db).await?.unwrap();
+        assert_eq!(unchanged.reply_sync_state, Some(checkpoint));
+        assert_eq!(unchanged.reply_last_attempt_at, Some(now));
+        assert_eq!(unchanged.reply_synced_at, Some(now));
+        drop(guard);
+        let response = rescan_single_reply(Path((source.id, model.id.clone())), Extension(db.clone())).await;
+        let Ok(response) = response else {
+            panic!("rescan-single should succeed after the sync finishes");
+        };
+        assert_eq!(response.into_response().status(), StatusCode::OK);
+        let reset = dynamic::Entity::find_by_id(&model.id).one(&db).await?.unwrap();
+        assert!(reset.rescan_reply);
+        assert!(reset.reply_sync_state.is_none());
+        assert!(reset.reply_last_attempt_at.is_none());
+        assert!(reset.reply_synced_at.is_none());
+        assert_eq!(reset.download_status, STATUS_COMPLETED);
+        Ok(())
+    }
 }

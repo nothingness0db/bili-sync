@@ -37,7 +37,11 @@ const VIDEO_PAGE_STATUS_OFFSET: usize = 4;
 #[allow(clippy::large_enum_variant)]
 enum VideoDetailUpdate {
     Invalid(i32),
-    Detail(Vec<page::ActiveModel>, video::ActiveModel),
+    Detail(
+        Vec<page::ActiveModel>,
+        video::ActiveModel,
+        Option<video_stat::ActiveModel>,
+    ),
 }
 
 /// 完整地处理某个视频来源
@@ -47,6 +51,7 @@ pub async fn process_video_source(
     connection: &DatabaseConnection,
     template: &handlebars::Handlebars<'_>,
     config: &Config,
+    sampling_started_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     // 预创建视频源目录，提前检测目录是否可写
     video_source.create_dir_all().await?;
@@ -58,6 +63,31 @@ pub async fn process_video_source(
     refresh_video_source(&video_source, video_streams, connection).await?;
     // 单独请求视频详情接口，获取视频的详情信息与所有的分页，写入数据库
     fetch_video_details(bili_client, &video_source, connection, config).await?;
+    // 完成下载的视频也持续采样；按 BV 号复用本轮已获取的详情，避免跨视频源重复请求。
+    let bvids = video::Entity::find()
+        .filter(video_source.filter_expr())
+        // 下载权限不足的视频仍可能有公开统计；只排除已确认删除的视频。
+        .filter(video::Column::DeletedAt.is_null())
+        .filter(video::Column::Category.eq(2))
+        .all(connection)
+        .await?
+        .into_iter()
+        .map(|v| v.bvid)
+        .collect::<std::collections::BTreeSet<_>>();
+    if let VideoSourceEnum::Submission(source) = &video_source {
+        crate::video_stats::track_source_videos(
+            source.upper_id,
+            &bvids.iter().cloned().collect::<Vec<_>>(),
+            connection,
+        )
+        .await?;
+    }
+    info!("开始采样{}的 {} 个视频统计..", video_source.display_name(), bvids.len());
+    for bvid in bvids {
+        crate::video_stats::sample_video(&bvid, sampling_started_at, bili_client, &config.credential, connection)
+            .await?;
+    }
+    info!("采样{}视频统计完成", video_source.display_name());
     // 根据弹幕更新规则清空弹幕任务的标记位，允许后续任务覆盖
     let danmaku_update_video_ids = prepare_danmaku_updates(&video_source, connection, config).await?;
     if ARGS.scan_only {
@@ -277,6 +307,7 @@ pub async fn fetch_video_details(
                     }
                 }
                 Ok((tags, mut view_info)) => {
+                    let stat = crate::video_stats::snapshot_from_info(&view_info, chrono::Utc::now());
                     let VideoInfo::Detail { pages, .. } = &mut view_info else {
                         unreachable!()
                     };
@@ -292,7 +323,7 @@ pub async fn fetch_video_details(
                     video_active_model.single_page = Set(Some(pages.len() == 1));
                     video_active_model.tags = Set(Some(tags.into()));
                     video_active_model.should_download = Set(video_source.rule().evaluate(&video_active_model, &pages));
-                    Some(VideoDetailUpdate::Detail(pages, video_active_model))
+                    Some(VideoDetailUpdate::Detail(pages, video_active_model, stat))
                 }
             }
         })
@@ -303,17 +334,22 @@ pub async fn fetch_video_details(
         let mut invalid_video_ids = Vec::new();
         let mut pages = Vec::new();
         let mut videos = Vec::new();
+        let mut stats = Vec::new();
         details.into_iter().for_each(|detail| match detail {
             VideoDetailUpdate::Invalid(video_id) => invalid_video_ids.push(video_id),
-            VideoDetailUpdate::Detail(video_pages, video) => {
+            VideoDetailUpdate::Detail(video_pages, video, stat) => {
                 pages.extend(video_pages);
                 videos.push(video);
+                stats.extend(stat);
             }
         });
         let txn = connection.begin().await?;
         update_video_detail_models(videos, &txn).await?;
         set_video_models_invalid(invalid_video_ids, &txn).await?;
         create_pages(pages, &txn).await?;
+        if !stats.is_empty() {
+            video_stat::Entity::insert_many(stats).exec(&txn).await?;
+        }
         txn.commit().await?;
     }
     video_source.log_fetch_video_end();

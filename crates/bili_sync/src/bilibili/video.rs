@@ -3,6 +3,7 @@ use futures::TryStreamExt;
 use futures::stream::FuturesUnordered;
 use prost::Message;
 use reqwest::Method;
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::bilibili::analyzer::PageAnalyzer;
@@ -15,6 +16,33 @@ pub struct Video<'a> {
     client: &'a BiliClient,
     pub bvid: &'a str,
     credential: &'a Credential,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct VideoCounters {
+    #[serde(default, deserialize_with = "counter")]
+    pub view: Option<i64>,
+    #[serde(default, deserialize_with = "counter")]
+    pub like: Option<i64>,
+    #[serde(default, deserialize_with = "counter")]
+    pub coin: Option<i64>,
+    #[serde(default, deserialize_with = "counter")]
+    pub favorite: Option<i64>,
+    #[serde(default, deserialize_with = "counter")]
+    pub share: Option<i64>,
+    #[serde(default, deserialize_with = "counter")]
+    pub reply: Option<i64>,
+    #[serde(default, deserialize_with = "counter")]
+    pub danmaku: Option<i64>,
+}
+
+/// 隐藏、缺失或格式化的计数不可当成 0；只保存精确的非负整数。
+fn counter<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(value
+        .as_i64()
+        .or_else(|| value.as_str().and_then(|s| s.parse().ok()))
+        .filter(|v| *v >= 0))
 }
 
 #[derive(Debug, serde::Deserialize, Default)]
@@ -62,7 +90,12 @@ impl<'a> Video<'a> {
             .json::<serde_json::Value>()
             .await?
             .validate()?;
-        Ok(serde_json::from_value(res["data"].take())?)
+        let info = serde_json::from_value(res["data"].take())?;
+        ensure!(
+            matches!(info, VideoInfo::Detail { .. }),
+            "unexpected video detail response"
+        );
+        Ok(info)
     }
 
     #[cfg(test)]

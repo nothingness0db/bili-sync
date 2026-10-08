@@ -301,6 +301,88 @@ export interface DynamicStatsResponse {
 	versions: UpperVersion[];
 }
 
+export interface ElecMember {
+	rank: number;
+	payMid: number;
+	uname: string;
+	avatar: string;
+}
+
+export interface ElecPoint {
+	id: number;
+	recordedAt: string;
+	show: boolean;
+	state: number;
+	total: number | null;
+	upowerCountShow: boolean | null;
+	listAvailable: boolean;
+	listedCount: number | null;
+}
+
+export interface ElecSnapshot extends ElecPoint {
+	members: ElecMember[];
+}
+
+export interface ElecHistory {
+	snapshot: ElecSnapshot;
+	previousAt: string | null;
+	comparisonAvailable: boolean;
+	entered: ElecMember[];
+	left: ElecMember[];
+	rankChanges: { payMid: number; uname: string; fromRank: number; toRank: number }[];
+}
+
+export interface ElecStatsResponse {
+	latest: ElecSnapshot | null;
+	points: ElecPoint[];
+	sampleCount: number;
+	baselineAt: string | null;
+	totalGrowth: number | null;
+	history: ElecHistory[];
+}
+
+export interface VideoMetrics {
+	viewCount: number | null;
+	likeCount: number | null;
+	coinCount: number | null;
+	favoriteCount: number | null;
+	shareCount: number | null;
+	replyCount: number | null;
+	danmakuCount: number | null;
+}
+
+export interface VideoStatPoint extends VideoMetrics {
+	recordedAt: string;
+}
+
+export interface VideoStatListItem {
+	bvid: string;
+	title: string;
+	cover: string;
+	pubtime: string;
+	latest: VideoStatPoint;
+	growth: VideoMetrics;
+	baselineAt: string | null;
+	sampleCount: number;
+}
+
+export interface VideoStatListResponse {
+	videos: VideoStatListItem[];
+	totalCount: number;
+}
+
+export interface VideoStatsResponse {
+	bvid: string;
+	title: string;
+	cover: string;
+	latest: VideoStatPoint | null;
+	stats: VideoStatPoint[];
+	growth: VideoMetrics;
+	baselineAt: string | null;
+	sampleCount: number;
+	relatedDynamics: { id: string; sourceId: number; upperName: string; replyCount: number }[];
+}
+
 export interface DynamicListItem {
 	id: string;
 	dynType: string;
@@ -311,6 +393,8 @@ export interface DynamicListItem {
 	rescanReply: boolean;
 	path: string;
 	valid: boolean;
+	replySyncStarted: boolean;
+	replySyncedAt: string | null;
 }
 
 export interface DynamicDynamicsResponse {
