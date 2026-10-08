@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 
-use axum::{
-    Extension, Router,
-    extract::{Path, Query},
-    routing::get,
-};
+use axum::extract::{Path, Query};
+use axum::routing::get;
+use axum::{Extension, Router};
 use bili_sync_entity::{dynamic_source, elec_rank, elec_stat};
 use chrono::{DateTime, Utc};
 use sea_orm::{
@@ -14,10 +12,8 @@ use sea_orm::{
 use serde::Serialize;
 
 use super::video_stats::StatsQuery;
-use crate::api::{
-    error::InnerApiError,
-    wrapper::{ApiError, ApiResponse},
-};
+use crate::api::error::InnerApiError;
+use crate::api::wrapper::{ApiError, ApiResponse};
 
 pub(super) fn router() -> Router {
     Router::new().route("/dynamic-sources/{id}/elec-stats", get(get_elec_stats))

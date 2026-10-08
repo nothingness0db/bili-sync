@@ -1,7 +1,8 @@
-use super::*;
 use bili_sync_migration::{Migrator, MigratorTrait};
 use sea_orm::{ConnectionTrait, Database, PaginatorTrait};
 use serde_json::json;
+
+use super::*;
 
 #[tokio::test]
 async fn snapshots_keep_unchanged_boards_and_distinguish_empty_from_unobservable() -> Result<()> {

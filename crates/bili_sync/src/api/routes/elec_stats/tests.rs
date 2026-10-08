@@ -1,10 +1,13 @@
+use anyhow::{Result, ensure};
+use axum::body::to_bytes;
+use axum::response::IntoResponse;
+use bili_sync_migration::{Migrator, MigratorTrait};
+use sea_orm::ActiveValue::Set;
+use sea_orm::{ActiveModelTrait, ConnectOptions, Database};
+use serde_json::Value;
+
 use super::*;
 use crate::elec_stats::{ElecInfo, ElecMember, save_snapshot};
-use anyhow::{Result, ensure};
-use axum::{body::to_bytes, response::IntoResponse};
-use bili_sync_migration::{Migrator, MigratorTrait};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectOptions, Database};
-use serde_json::Value;
 
 async fn database() -> Result<DatabaseConnection> {
     let mut options = ConnectOptions::new("sqlite::memory:");

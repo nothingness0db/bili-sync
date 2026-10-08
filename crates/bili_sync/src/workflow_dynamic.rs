@@ -1073,7 +1073,9 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::Arc;
 
-    use axum::{Json, Router, extract::RawQuery, routing::get};
+    use axum::extract::RawQuery;
+    use axum::routing::get;
+    use axum::{Json, Router};
     use bili_sync_migration::{Migrator, MigratorTrait};
     use sea_orm::{ConnectOptions, Database};
     use serde_json::json;

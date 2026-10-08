@@ -1,9 +1,12 @@
-use std::{collections::HashSet, sync::LazyLock, time::Duration};
+use std::collections::HashSet;
+use std::sync::LazyLock;
+use std::time::Duration;
 
 use anyhow::Result;
 use bili_sync_entity::{elec_rank, elec_stat};
 use chrono::{DateTime, Utc};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection, EntityTrait, TransactionTrait};
+use sea_orm::ActiveValue::Set;
+use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, TransactionTrait};
 use serde::Deserialize;
 use serde_json::Value;
 

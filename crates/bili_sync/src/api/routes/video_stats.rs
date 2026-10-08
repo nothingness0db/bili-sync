@@ -1,10 +1,8 @@
 use std::collections::HashMap;
 
-use axum::{
-    Extension, Router,
-    extract::{Path, Query},
-    routing::get,
-};
+use axum::extract::{Path, Query};
+use axum::routing::get;
+use axum::{Extension, Router};
 use bili_sync_entity::{dynamic_source, video, video_stat};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use sea_orm::{
@@ -13,10 +11,8 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::{
-    error::InnerApiError,
-    wrapper::{ApiError, ApiResponse},
-};
+use crate::api::error::InnerApiError;
+use crate::api::wrapper::{ApiError, ApiResponse};
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -337,13 +333,16 @@ pub async fn get_video_stats(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use anyhow::{Result, ensure};
-    use axum::{body::to_bytes, response::IntoResponse};
+    use axum::body::to_bytes;
+    use axum::response::IntoResponse;
     use bili_sync_entity::{dynamic, reply};
     use bili_sync_migration::{Migrator, MigratorTrait};
-    use sea_orm::{ActiveModelTrait, ActiveValue::Set, ConnectOptions, Database, IntoActiveModel, PaginatorTrait};
+    use sea_orm::ActiveValue::Set;
+    use sea_orm::{ActiveModelTrait, ConnectOptions, Database, IntoActiveModel, PaginatorTrait};
     use serde_json::{Value, json};
+
+    use super::*;
 
     const BVID: &str = "BV1xx411c7mD";
 

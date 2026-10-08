@@ -4,9 +4,9 @@ use std::time::Duration;
 use anyhow::Result;
 use bili_sync_entity::video_stat;
 use chrono::{DateTime, Utc};
+use sea_orm::ActiveValue::Set;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
-    QueryFilter, Statement,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, QueryFilter, Statement,
 };
 
 use crate::bilibili::{BiliClient, BiliError, Credential, Video, VideoInfo};
@@ -124,10 +124,11 @@ async fn save_sample_result(bvid: &str, result: Result<VideoInfo>, db: &Database
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bili_sync_migration::{Migrator, MigratorTrait};
     use sea_orm::{Database, PaginatorTrait};
     use serde_json::json;
+
+    use super::*;
 
     fn detail(stat: serde_json::Value) -> VideoInfo {
         serde_json::from_value(json!({
