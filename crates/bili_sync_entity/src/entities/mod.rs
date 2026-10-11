@@ -14,5 +14,6 @@ pub mod reply;
 pub mod submission;
 pub mod upper_stat;
 pub mod video;
+pub mod video_availability;
 pub mod video_stat;
 pub mod watch_later;

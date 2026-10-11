@@ -170,17 +170,24 @@ pub async fn update_video_detail_models(
     Ok(())
 }
 
-/// 将视频标记为失效
-pub async fn set_video_models_invalid(video_ids: Vec<i32>, connection: &DatabaseTransaction) -> Result<()> {
-    if video_ids.is_empty() {
-        return Ok(());
+/// 顺带标记明确不可用的视频，保留本地文件和下载状态。
+/// 仅确认删除时记录删除时间；重复检测不覆盖原时间。
+pub async fn mark_video_models_unavailable(
+    filter: SimpleExpr,
+    deleted: bool,
+    connection: &impl ConnectionTrait,
+) -> Result<u64> {
+    let mut update = video::Entity::update_many()
+        .filter(filter)
+        .col_expr(video::Column::Valid, Expr::value(false));
+    if deleted {
+        update = update
+            .filter(video::Column::DeletedAt.is_null())
+            .col_expr(video::Column::DeletedAt, Expr::value(chrono::Utc::now().naive_utc()));
+    } else {
+        update = update.filter(video::Column::Valid.eq(true));
     }
-    video::Entity::update_many()
-        .filter(video::Column::Id.is_in(video_ids))
-        .col_expr(video::Column::Valid, Expr::value(false))
-        .exec(connection)
-        .await?;
-    Ok(())
+    Ok(update.exec(connection).await?.rows_affected)
 }
 
 /// 更新视频 model 的下载状态

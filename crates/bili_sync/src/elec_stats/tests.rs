@@ -67,8 +67,15 @@ async fn interrupted_migration_retries_without_losing_boards() -> Result<()> {
     Migrator::up(&db, None).await?;
     assert_eq!(elec_stat::Entity::find().count(&db).await?, 1);
     assert_eq!(elec_rank::Entity::find().count(&db).await?, 1);
-    Migrator::down(&db, Some(1)).await?;
-    Migrator::up(&db, Some(1)).await?;
+    // 回滚到充电统计迁移之前，不依赖它始终是最新一条迁移。
+    let migrations = Migrator::migrations();
+    let elec_index = migrations
+        .iter()
+        .position(|migration| migration.name() == "m20261008_000003_elec_stat")
+        .unwrap();
+    let rollback_steps = (migrations.len() - elec_index) as u32;
+    Migrator::down(&db, Some(rollback_steps)).await?;
+    Migrator::up(&db, Some(rollback_steps)).await?;
     assert_eq!(elec_stat::Entity::find().count(&db).await?, 0);
     Ok(())
 }

@@ -230,7 +230,15 @@ pub async fn scan_deleted_videos(
                 progress.current = idx + 1;
                 progress.current_source = video_source.display_name().to_string();
             }
-            match detect_deleted_videos(&video_source, &bili_client, &config.credential, &connection).await {
+            match detect_deleted_videos(
+                &video_source,
+                &bili_client,
+                &config.credential,
+                &connection,
+                config.try_upower_anyway,
+            )
+            .await
+            {
                 Ok((d, r)) => {
                     scanned += 1;
                     deleted += d;

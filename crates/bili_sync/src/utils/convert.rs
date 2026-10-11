@@ -126,6 +126,7 @@ impl VideoInfo {
         base_model: bili_sync_entity::video::Model,
         try_upower_anyway: bool,
     ) -> bili_sync_entity::video::ActiveModel {
+        let valid = self.is_downloadable(try_upower_anyway);
         match self {
             VideoInfo::Detail {
                 title,
@@ -136,10 +137,6 @@ impl VideoInfo {
                 staff,
                 ctime,
                 pubtime,
-                state,
-                is_upower_exclusive,
-                is_upower_play,
-                redirect_url,
                 ..
             } => bili_sync_entity::video::ActiveModel {
                 bvid: Set(bvid),
@@ -160,9 +157,7 @@ impl VideoInfo {
                 //  2. 都为 false，表示视频是非充电视频
                 // redirect_url 仅在视频为番剧、影视、纪录片等特殊视频时才会有值，如果为空说明是普通视频
                 // 仅在三种条件都满足时，才认为视频是可下载的
-                valid: Set(state == 0
-                    && (try_upower_anyway || (is_upower_exclusive == is_upower_play))
-                    && redirect_url.is_none()),
+                valid: Set(valid),
                 upper_id: Set(upper.mid),
                 upper_name: Set(upper.name),
                 upper_face: Set(upper.face),
@@ -171,6 +166,17 @@ impl VideoInfo {
             },
             _ => unreachable!(),
         }
+    }
+
+    /// 恢复有效状态时复用详情填充的权限判断，避免把充电专享等视频误恢复。
+    pub fn is_downloadable(&self, try_upower_anyway: bool) -> bool {
+        matches!(self, VideoInfo::Detail {
+            state: 0,
+            is_upower_exclusive,
+            is_upower_play,
+            redirect_url: None,
+            ..
+        } if try_upower_anyway || is_upower_exclusive == is_upower_play)
     }
 
     /// 获取视频的发布时间，用于对时间做筛选检查新视频

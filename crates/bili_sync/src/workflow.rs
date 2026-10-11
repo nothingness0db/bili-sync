@@ -23,8 +23,8 @@ use crate::utils::danmaku_schedule::should_sync_danmaku;
 use crate::utils::download_context::DownloadContext;
 use crate::utils::format_arg::{page_format_args, video_format_args};
 use crate::utils::model::{
-    create_pages, create_videos, filter_unfilled_videos, filter_unhandled_video_pages, set_video_models_invalid,
-    update_pages_model, update_video_detail_models, update_videos_model,
+    create_pages, create_videos, filter_unfilled_videos, filter_unhandled_video_pages, update_pages_model,
+    update_video_detail_models, update_videos_model,
 };
 use crate::utils::nfo::{NFO, ToNFO};
 use crate::utils::notify::notify;
@@ -36,7 +36,7 @@ const VIDEO_PAGE_STATUS_OFFSET: usize = 4;
 
 #[allow(clippy::large_enum_variant)]
 enum VideoDetailUpdate {
-    Invalid(i32),
+    Unavailable(String, BiliError),
     Detail(
         Vec<page::ActiveModel>,
         video::ActiveModel,
@@ -84,8 +84,15 @@ pub async fn process_video_source(
     }
     info!("开始采样{}的 {} 个视频统计..", video_source.display_name(), bvids.len());
     for bvid in bvids {
-        crate::video_stats::sample_video(&bvid, sampling_started_at, bili_client, &config.credential, connection)
-            .await?;
+        crate::video_stats::sample_video(
+            &bvid,
+            sampling_started_at,
+            bili_client,
+            &config.credential,
+            connection,
+            config.try_upower_anyway,
+        )
+        .await?;
     }
     info!("采样{}视频统计完成", video_source.display_name());
     // 根据弹幕更新规则清空弹幕任务的标记位，允许后续任务覆盖
@@ -177,6 +184,7 @@ pub async fn detect_deleted_videos(
     bili_client: &BiliClient,
     credential: &crate::bilibili::Credential,
     connection: &DatabaseConnection,
+    try_upower_anyway: bool,
 ) -> Result<(usize, usize)> {
     let current_bvids = video_source.collect_current_bvids(bili_client, credential).await?;
     // 全部视频都参与评估（含已标记失效的，用于恢复误标）
@@ -186,10 +194,13 @@ pub async fn detect_deleted_videos(
         .await?;
     let mut confirmed_deleted_ids = Vec::new();
     let mut restored_ids = Vec::new();
-    // 差集：本地有但不在当前投稿列表中的视频，需逐个调详情接口确认
-    let to_confirm: Vec<_> = videos.iter().filter(|v| !current_bvids.contains(&v.bvid)).collect();
+    // 手动检查可立即复查失效视频，包含重新出现在投稿列表中的视频。
+    let to_confirm: Vec<_> = videos
+        .iter()
+        .filter(|v| !current_bvids.contains(&v.bvid) || !v.valid || v.deleted_at.is_some())
+        .collect();
     info!(
-        "「{}」投稿列表拉取完成：当前 {} 个投稿，本地 {} 个视频，{} 个不在列表内需逐个确认",
+        "「{}」投稿列表拉取完成：当前 {} 个投稿，本地 {} 个视频，{} 个不在列表内或已失效需逐个确认",
         video_source.display_name(),
         current_bvids.len(),
         videos.len(),
@@ -199,8 +210,10 @@ pub async fn detect_deleted_videos(
         // 不在投稿列表里：可能是动态来源的视频或被删除的视频，请求详情接口确认
         let video = Video::new(bili_client, video_model.bvid.as_str(), credential);
         match video.get_view_info().await {
-            Err(e) if matches!(e.downcast_ref::<BiliError>(), Some(inner) if inner.is_video_not_found()) => {
-                if video_model.valid {
+            Err(e) if matches!(e.downcast_ref::<BiliError>(), Some(inner) if inner.is_video_unavailable()) => {
+                let error = e.downcast_ref::<BiliError>().unwrap();
+                crate::video_stats::record_video_unavailable(&video_model.bvid, error, connection).await?;
+                if error.is_video_not_found() && video_model.deleted_at.is_none() {
                     info!(
                         "「{}」视频「{}」（{}）已从 B 站消失，标记为已删除",
                         video_source.display_name(),
@@ -219,11 +232,11 @@ pub async fn detect_deleted_videos(
                     e
                 );
             }
-            Ok(_) => {
-                // 视频仍存在（如动态来源或此前误标）：恢复所有已失效视频。
-                // 规则过滤用的是 should_download 字段、不会动 valid，valid = false 只会来自
-                // 删除检测/详情标记，因此只要详情接口确认仍存在就可以安全恢复
-                if !video_model.valid {
+            Ok(info) => {
+                crate::video_stats::record_video_available(&video_model.bvid, &info, try_upower_anyway, connection)
+                    .await?;
+                // 已恢复可见也要满足下载权限，避免误恢复充电专享等视频。
+                if !video_model.valid && info.is_downloadable(try_upower_anyway) {
                     info!(
                         "「{}」视频「{}」（{}）仍存在，恢复为有效",
                         video_source.display_name(),
@@ -258,15 +271,6 @@ pub async fn detect_deleted_videos(
     // 当前源确认完毕，清零源内进度（confirm_total 为 0 时前端不显示源内进度）
     crate::api::update_scan_confirm_progress(0, 0);
     let deleted_count = confirmed_deleted_ids.len();
-    if !confirmed_deleted_ids.is_empty() {
-        let ids = std::mem::take(&mut confirmed_deleted_ids);
-        video::Entity::update_many()
-            .filter(video::Column::Id.is_in(ids))
-            .col_expr(video::Column::Valid, Expr::value(false))
-            .col_expr(video::Column::DeletedAt, Expr::value(chrono::Utc::now().naive_utc()))
-            .exec(connection)
-            .await?;
-    }
     let restored_count = restored_ids.len();
     if !restored_ids.is_empty() {
         video::Entity::update_many()
@@ -299,9 +303,9 @@ pub async fn fetch_video_details(
                         &video_model.bvid, &video_model.name, e
                     );
                     if let Some(inner) = e.downcast_ref::<BiliError>()
-                        && inner.is_video_not_found()
+                        && inner.is_video_unavailable()
                     {
-                        Some(VideoDetailUpdate::Invalid(video_model.id))
+                        Some(VideoDetailUpdate::Unavailable(video_model.bvid, inner.clone()))
                     } else {
                         None
                     }
@@ -331,12 +335,12 @@ pub async fn fetch_video_details(
         .filter_map(futures::future::ready)
         .chunks(15);
     while let Some(details) = tasks.next().await {
-        let mut invalid_video_ids = Vec::new();
+        let mut unavailable_videos = Vec::new();
         let mut pages = Vec::new();
         let mut videos = Vec::new();
         let mut stats = Vec::new();
         details.into_iter().for_each(|detail| match detail {
-            VideoDetailUpdate::Invalid(video_id) => invalid_video_ids.push(video_id),
+            VideoDetailUpdate::Unavailable(bvid, error) => unavailable_videos.push((bvid, error)),
             VideoDetailUpdate::Detail(video_pages, video, stat) => {
                 pages.extend(video_pages);
                 videos.push(video);
@@ -345,7 +349,9 @@ pub async fn fetch_video_details(
         });
         let txn = connection.begin().await?;
         update_video_detail_models(videos, &txn).await?;
-        set_video_models_invalid(invalid_video_ids, &txn).await?;
+        for (bvid, error) in unavailable_videos {
+            crate::video_stats::record_video_unavailable(&bvid, &error, &txn).await?;
+        }
         create_pages(pages, &txn).await?;
         if !stats.is_empty() {
             video_stat::Entity::insert_many(stats).exec(&txn).await?;

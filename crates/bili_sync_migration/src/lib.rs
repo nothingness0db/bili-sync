@@ -23,6 +23,7 @@ mod m20260823_000001_add_danmaku_last_synced_at;
 mod m20261008_000001_add_reply_sync_progress;
 mod m20261008_000002_video_stat;
 mod m20261008_000003_elec_stat;
+mod m20261012_000001_video_availability;
 
 pub struct Migrator;
 
@@ -53,6 +54,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261008_000001_add_reply_sync_progress::Migration),
             Box::new(m20261008_000002_video_stat::Migration),
             Box::new(m20261008_000003_elec_stat::Migration),
+            Box::new(m20261012_000001_video_availability::Migration),
         ]
     }
 }

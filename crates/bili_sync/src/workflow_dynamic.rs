@@ -302,9 +302,15 @@ async fn collect_dynamic_video_count(
                 ..Default::default()
             },
         );
-        let exists =
-            crate::video_stats::sample_video(bvid, sampling_started_at, bili_client, &config.credential, connection)
-                .await?;
+        let exists = crate::video_stats::sample_video(
+            bvid,
+            sampling_started_at,
+            bili_client,
+            &config.credential,
+            connection,
+            config.try_upower_anyway,
+        )
+        .await?;
         if dynamic_bvids.contains(bvid) && !current_bvids.contains(bvid) {
             match exists {
                 Some(true) => count += 1,

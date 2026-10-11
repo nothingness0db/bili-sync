@@ -38,9 +38,14 @@ impl BiliError {
     }
 
     /// 稿件已删除/不存在：-404 为旧版返回码，62012 为新版返回码
-    /// 注意 62002「稿件不可见」（审核中/锁定/退回）不算删除，调用方应继续跳过
+    /// 62002「稿件不可见」仅表示当前不可用，不算删除。
     pub fn is_video_not_found(&self) -> bool {
         matches!(self, BiliError::ErrorResponse { code, .. } if *code == -404 || *code == 62012)
+    }
+
+    /// 明确不可用的视频可标记失效；网络、权限和风控错误不属于视频失效。
+    pub fn is_video_unavailable(&self) -> bool {
+        self.is_video_not_found() || matches!(self, BiliError::ErrorResponse { code: 62002, .. })
     }
 }
 
@@ -56,5 +61,24 @@ mod tests {
             .validate()
             .unwrap_err();
         assert!(error.downcast_ref::<BiliError>().unwrap().is_risk_control_related());
+    }
+
+    #[test]
+    fn invisible_videos_are_unavailable_but_not_deleted() {
+        for (code, unavailable, deleted) in [
+            (62002, true, false),
+            (-404, true, true),
+            (62012, true, true),
+            (-403, false, false),
+            (-503, false, false),
+        ] {
+            let error = BiliError::ErrorResponse {
+                code,
+                message: None,
+                response: "{}".into(),
+            };
+            assert_eq!(error.is_video_unavailable(), unavailable, "code {code}");
+            assert_eq!(error.is_video_not_found(), deleted, "code {code}");
+        }
     }
 }
