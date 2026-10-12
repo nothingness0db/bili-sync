@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import api from '$lib/api';
 	import SquareArrowOutUpRightIcon from '@lucide/svelte/icons/square-arrow-out-up-right';
@@ -25,8 +25,13 @@
 	let clearAndResetting = false;
 	let statusEditorOpen = false;
 	let statusEditorLoading = false;
+	let videoSequence = 0;
 
 	async function loadVideoDetail() {
+		const sequence = ++videoSequence;
+		videoData = null;
+		error = null;
+		loading = false;
 		const videoId = parseInt($page.params.id!);
 		if (isNaN(videoId)) {
 			error = '无效的视频 ID';
@@ -34,17 +39,18 @@
 			return;
 		}
 		loading = true;
-		error = null;
 		try {
 			const result = await api.getVideo(videoId);
-			videoData = result.data;
-		} catch (error) {
-			console.error('加载视频详情失败：', error);
+			if (sequence === videoSequence) videoData = result.data;
+		} catch (cause) {
+			if (sequence !== videoSequence) return;
+			error = (cause as ApiError).message;
+			console.error('加载视频详情失败：', cause);
 			toast.error('加载视频详情失败', {
-				description: (error as ApiError).message
+				description: error
 			});
 		} finally {
-			loading = false;
+			if (sequence === videoSequence) loading = false;
 		}
 	}
 
@@ -56,6 +62,10 @@
 			},
 			{ label: '视频详情' }
 		]);
+	});
+
+	onDestroy(() => {
+		videoSequence += 1;
 	});
 
 	// 监听路由参数变化
@@ -154,7 +164,8 @@
 {:else if error}
 	<div class="flex items-center justify-center py-12">
 		<div class="space-y-2 text-center">
-			<p class="text-destructive">{error}</p>
+			<p role="alert" class="text-destructive">{error}</p>
+			<Button size="sm" variant="outline" onclick={loadVideoDetail}>重新加载</Button>
 			<button
 				class="text-muted-foreground hover:text-foreground text-sm transition-colors"
 				onclick={() => goto('/')}

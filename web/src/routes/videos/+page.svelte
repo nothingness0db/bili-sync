@@ -50,6 +50,9 @@
 
 	let videosData: VideosResponse | null = null;
 	let loading = false;
+	let videosError: string | null = null;
+	let videosSequence = 0;
+	let mounted = false;
 
 	let lastSearch: string | null = null;
 
@@ -97,7 +100,8 @@
 	}
 
 	let videoSources: VideoSourcesResponse | null = null;
-	let videoSourcesLoaded = false;
+	let videoSourcesError: string | null = null;
+	let loadingVideoSources = false;
 	let filters: Record<string, Filter> | null = null;
 	let sourceMap: SvelteMap<string, { type: string; name: string }> = new SvelteMap();
 
@@ -144,7 +148,10 @@
 		createdFrom: string | null = null,
 		createdTo: string | null = null
 	) {
+		const sequence = ++videosSequence;
 		loading = true;
+		videosError = null;
+		videosData = null;
 		try {
 			const params: Record<string, string | number | boolean> = {
 				page: pageNum,
@@ -169,14 +176,29 @@
 				params.created_to = createdTo;
 			}
 			const result = await api.getVideos(params);
-			videosData = result.data;
+			if (sequence === videosSequence) videosData = result.data;
 		} catch (error) {
+			if (sequence !== videosSequence) return;
+			videosError = (error as ApiError).message;
 			console.error('加载视频失败：', error);
 			toast.error('加载视频失败', {
 				description: (error as ApiError).message
 			});
 		} finally {
-			loading = false;
+			if (sequence === videosSequence) loading = false;
+		}
+	}
+
+	async function loadVideoSources() {
+		loadingVideoSources = true;
+		videoSourcesError = null;
+		try {
+			const response = await api.getVideoSources();
+			if (mounted) videoSources = response.data;
+		} catch (error) {
+			if (mounted) videoSourcesError = (error as ApiError).message;
+		} finally {
+			if (mounted) loadingVideoSources = false;
 		}
 	}
 
@@ -333,22 +355,21 @@
 	}
 
 	// 获取筛选条件的显示数组
-	function getFilterDescriptionParts(): string[] {
+	function getFilterDescriptionParts(sources: VideoSourcesResponse | null): string[] {
 		const state = $appStateStore;
 		const parts: string[] = [];
 		if (state.query.trim()) {
 			parts.push(`搜索词："${state.query}"`);
 		}
-		if (state.videoSource && videoSources) {
+		if (state.videoSource) {
 			const sourceType = state.videoSource.type;
 			const sourceId = parseInt(state.videoSource.id);
 			const sourceConfig = Object.values(VIDEO_SOURCES).find((s) => s.type === sourceType);
 			if (sourceConfig) {
-				const sourceList = videoSources[sourceType as keyof VideoSourcesResponse] as VideoSource[];
-				const source = sourceList.find((s) => s.id === sourceId);
-				if (source) {
-					parts.push(`${sourceConfig.title}：${source.name}`);
-				}
+				const sourceList = sources?.[sourceType as keyof VideoSourcesResponse] as
+					VideoSource[] | undefined;
+				const source = sourceList?.find((s) => s.id === sourceId);
+				parts.push(`${sourceConfig.title}：${source?.name || `ID ${sourceId}`}`);
 			}
 		}
 		if (state.statusFilter) {
@@ -375,7 +396,7 @@
 		return parts;
 	}
 
-	$: if (videoSourcesLoaded && $page.url.search !== lastSearch) {
+	$: if (mounted && $page.url.search !== lastSearch) {
 		lastSearch = $page.url.search;
 		handleSearchParamsChange($page.url.searchParams);
 	}
@@ -410,24 +431,37 @@
 		sourceMap.clear();
 	}
 
-	onMount(async () => {
+	onMount(() => {
 		setBreadcrumb([
 			{
 				label: '视频'
 			}
 		]);
-		videoSources = (await api.getVideoSources()).data;
-		videoSourcesLoaded = true;
+		mounted = true;
+		void loadVideoSources();
+		return () => {
+			mounted = false;
+			videosSequence += 1;
+		};
 	});
 
 	$: totalPages = videosData ? Math.ceil(videosData.total_count / pageSize) : 0;
 	$: hasFilters = hasActiveFilters($appStateStore);
-	$: filterDescriptionParts = videoSources && $appStateStore && getFilterDescriptionParts();
+	$: filterDescriptionParts = $appStateStore && getFilterDescriptionParts(videoSources);
 </script>
 
 <svelte:head>
 	<title>主页 - Bili Sync</title>
 </svelte:head>
+
+{#if videoSourcesError}
+	<div role="alert" class="mb-4 flex items-center gap-3 rounded-md border p-3 text-sm">
+		<p class="text-destructive">来源信息加载失败：{videoSourcesError}</p>
+		<Button size="sm" variant="outline" onclick={loadVideoSources} disabled={loadingVideoSources}>
+			重试
+		</Button>
+	</div>
+{/if}
 
 <div class="mb-4 flex items-center justify-between">
 	<SearchBar
@@ -568,6 +602,11 @@
 {#if loading}
 	<div class="flex items-center justify-center py-16">
 		<div class="text-muted-foreground/70 text-sm">加载中...</div>
+	</div>
+{:else if videosError}
+	<div role="alert" class="space-y-3 py-16 text-center">
+		<p class="text-destructive text-sm">加载视频失败：{videosError}</p>
+		<Button size="sm" variant="outline" onclick={reloadVideos}>重新加载</Button>
 	</div>
 {:else if videosData?.videos.length}
 	<div

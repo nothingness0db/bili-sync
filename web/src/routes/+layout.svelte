@@ -7,6 +7,14 @@
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import { Toaster } from '$lib/components/ui/sonner/index.js';
 	import { ModeWatcher } from 'mode-watcher';
+	import { afterNavigate } from '$app/navigation';
+
+	let main: HTMLDivElement;
+
+	afterNavigate(({ to }) => {
+		// 页内锚点由路由处理，其余导航重置实际的滚动容器。
+		if (!to?.url.hash) main?.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+	});
 </script>
 
 <ModeWatcher disableHeadScriptInjection />
@@ -22,6 +30,7 @@
 			</div>
 		</header>
 		<div
+			bind:this={main}
 			class="w-full overflow-y-auto px-6 py-2"
 			style="scrollbar-width: thin; scrollbar-gutter: stable !important;"
 			id="main"

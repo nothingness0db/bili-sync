@@ -42,6 +42,8 @@ export class WebSocketManager {
 
 	private subscribedEvents: Set<EventType> = new Set();
 	private connectionPromise: Promise<void> | null = null;
+	private rejectConnection: ((reason: Error) => void) | null = null;
+	private shouldReconnect = false;
 
 	private constructor() {}
 
@@ -57,47 +59,59 @@ export class WebSocketManager {
 		if (this.connected) return Promise.resolve();
 		if (this.connectionPromise) return this.connectionPromise;
 
-		this.connectionPromise = new Promise((resolve, reject) => {
+		this.shouldReconnect = true;
+		if (this.reconnectTimer !== null) {
+			clearTimeout(this.reconnectTimer);
+			this.reconnectTimer = null;
+		}
+
+		let socket: WebSocket;
+		try {
 			const token = api.getAuthToken() || '';
+			const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+			// 使用 base64URL no padding 编码 token 以避免特殊字符问题
+			socket = new WebSocket(
+				`${protocol}${window.location.host}/api/ws`,
+				btoa(token).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+			);
+		} catch (error) {
+			console.error('Failed to create WebSocket:', error);
+			toast.error('创建 WebSocket 连接失败，请检查网络或稍后重试');
+			this.scheduleReconnect();
+			return Promise.reject(error);
+		}
 
-			try {
-				const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
-				// 使用 base64URL no padding 编码 token 以避免特殊字符问题
-				this.socket = new WebSocket(
-					`${protocol}${window.location.host}/api/ws`,
-					btoa(token).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-				);
-				this.socket.onopen = () => {
-					this.connected = true;
-					this.reconnectAttempts = 0;
-					this.connectionPromise = null;
-					this.resubscribeEvents();
-					resolve();
-				};
-
-				this.socket.onmessage = this.handleMessage.bind(this);
-
-				this.socket.onclose = () => {
-					this.connected = false;
-					this.connectionPromise = null;
-					this.scheduleReconnect();
-				};
-
-				this.socket.onerror = (error) => {
-					console.error('WebSocket error:', error);
-					this.connectionPromise = null;
-					reject(error);
-					toast.error('WebSocket 连接发生错误，请检查网络或稍后重试');
-				};
-			} catch (error) {
+		this.socket = socket;
+		this.connectionPromise = new Promise((resolve, reject) => {
+			this.rejectConnection = reject;
+			socket.onopen = () => {
+				if (this.socket !== socket) return;
+				this.connected = true;
+				this.reconnectAttempts = 0;
 				this.connectionPromise = null;
-				reject(error);
-				console.error('Failed to create WebSocket:', error);
-				toast.error('创建 WebSocket 连接失败，请检查网络或稍后重试');
+				this.rejectConnection = null;
+				this.resubscribeEvents();
+				resolve();
+			};
+			socket.onmessage = (event) => {
+				if (this.socket === socket) this.handleMessage(event);
+			};
+			socket.onclose = () => {
+				if (this.socket !== socket) return;
+				this.socket = null;
+				this.connected = false;
+				this.connectionPromise = null;
+				this.rejectConnection = null;
+				reject(new Error('WebSocket 连接已关闭'));
 				this.scheduleReconnect();
-			}
+			};
+			socket.onerror = (error) => {
+				if (this.socket !== socket) return;
+				console.error('WebSocket error:', error);
+				reject(new Error('WebSocket 连接失败'));
+				toast.error('WebSocket 连接发生错误，请检查网络或稍后重试');
+			};
 		});
-
 		return this.connectionPromise;
 	}
 
@@ -120,13 +134,11 @@ export class WebSocketManager {
 		}
 	}
 
-	private async sendMessage(message: ClientEvent): Promise<void> {
-		if (!this.connected) {
-			await this.connect();
-		}
+	private sendMessage(message: ClientEvent): void {
+		if (!this.connected || !this.socket) return;
 
 		try {
-			this.socket!.send(JSON.stringify(message));
+			this.socket.send(JSON.stringify(message));
 		} catch (error) {
 			console.error('Failed to send message:', error);
 			toast.error('发送 WebSocket 消息失败', {
@@ -135,30 +147,39 @@ export class WebSocketManager {
 		}
 	}
 
-	private async subscribe(eventType: EventType): Promise<void> {
+	private subscribe(eventType: EventType): void {
 		if (this.subscribedEvents.has(eventType)) return;
 
-		await this.sendMessage({ subscribe: eventType });
+		// 先保存订阅意图，首次连接失败后仍可在重连时恢复。
 		this.subscribedEvents.add(eventType);
+		if (this.connected) {
+			this.sendMessage({ subscribe: eventType });
+		} else {
+			void this.connect().catch(() => {
+				// 连接错误已提示，保留订阅供自动重连恢复。
+			});
+		}
 	}
 
 	// 取消订阅事件
-	private async unsubscribe(eventType: EventType): Promise<void> {
-		if (!this.subscribedEvents.has(eventType)) return;
-
-		await this.sendMessage({ unsubscribe: eventType });
-		this.subscribedEvents.delete(eventType);
+	private unsubscribe(eventType: EventType): void {
+		if (!this.subscribedEvents.delete(eventType)) return;
+		// 断线时无需为取消订阅重新建立连接。
+		this.sendMessage({ unsubscribe: eventType });
+		if (this.subscribedEvents.size === 0 && this.reconnectTimer !== null) {
+			clearTimeout(this.reconnectTimer);
+			this.reconnectTimer = null;
+		}
 	}
 
-	private async resubscribeEvents(): Promise<void> {
-		await Promise.all(
-			Array.from(this.subscribedEvents).map(async (eventType) => {
-				await this.sendMessage({ subscribe: eventType });
-			})
-		);
+	private resubscribeEvents(): void {
+		for (const eventType of this.subscribedEvents) {
+			this.sendMessage({ subscribe: eventType });
+		}
 	}
 
 	private scheduleReconnect(): void {
+		if (!this.shouldReconnect || this.subscribedEvents.size === 0) return;
 		if (this.reconnectTimer !== null) {
 			clearTimeout(this.reconnectTimer);
 		}
@@ -172,8 +193,12 @@ export class WebSocketManager {
 		console.log(`Scheduling reconnect in ${delay}ms`);
 
 		this.reconnectTimer = setTimeout(() => {
+			this.reconnectTimer = null;
+			if (!this.shouldReconnect || this.subscribedEvents.size === 0) return;
 			this.reconnectAttempts++;
-			this.connect();
+			void this.connect().catch(() => {
+				// 自动重连失败由连接处理器安排下一次尝试。
+			});
 		}, delay);
 	}
 
@@ -254,10 +279,11 @@ export class WebSocketManager {
 	}
 
 	public disconnect(): void {
-		if (this.socket) {
-			this.socket.close();
-			this.socket = null;
-		}
+		this.shouldReconnect = false;
+		const socket = this.socket;
+		this.socket = null;
+		this.rejectConnection?.(new Error('WebSocket 已主动断开'));
+		this.rejectConnection = null;
 
 		if (this.reconnectTimer !== null) {
 			clearTimeout(this.reconnectTimer);
@@ -266,7 +292,9 @@ export class WebSocketManager {
 
 		this.connected = false;
 		this.connectionPromise = null;
+		this.reconnectAttempts = 0;
 		this.subscribedEvents.clear();
+		socket?.close();
 	}
 }
 
