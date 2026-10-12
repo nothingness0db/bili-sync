@@ -61,6 +61,10 @@ export interface VideoResponse {
 	pages: PageInfo[];
 }
 
+export interface VideoPlaybackResponse {
+	pages: { id: number; pid: number; name: string; url: string }[];
+}
+
 export interface ResetVideoResponse {
 	resetted: boolean;
 	video: VideoInfo;

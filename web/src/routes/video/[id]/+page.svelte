@@ -14,6 +14,8 @@
 	import VideoCard from '$lib/components/video-card.svelte';
 	import VideoStatsPanel from '$lib/components/video-stats-panel.svelte';
 	import StatusEditor from '$lib/components/status-editor.svelte';
+	import LocalVideoPlayer from '$lib/components/local-video-player.svelte';
+	import PlayIcon from '@lucide/svelte/icons/play';
 	import { toast } from 'svelte-sonner';
 
 	let videoData: VideoResponse | null = null;
@@ -26,10 +28,12 @@
 	let statusEditorOpen = false;
 	let statusEditorLoading = false;
 	let videoSequence = 0;
+	let playbackOpen = false;
 
 	async function loadVideoDetail() {
 		const sequence = ++videoSequence;
 		videoData = null;
+		playbackOpen = false;
 		error = null;
 		loading = false;
 		const videoId = parseInt($page.params.id!);
@@ -177,9 +181,13 @@
 {:else if videoData}
 	<!-- 视频信息区域 -->
 	<section>
-		<div class="mb-4 flex items-center justify-between">
+		<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
 			<h2 class="text-xl font-semibold">视频信息</h2>
-			<div class="flex gap-2">
+			<div class="flex flex-wrap gap-2">
+				<Button size="sm" onclick={() => (playbackOpen = true)}>
+					<PlayIcon class="mr-2 h-4 w-4" />
+					播放本地视频
+				</Button>
 				<Button
 					size="sm"
 					variant="outline"
@@ -241,6 +249,12 @@
 	</section>
 
 	<VideoStatsPanel bvid={videoData.video.bvid} />
+
+	<LocalVideoPlayer
+		bind:open={playbackOpen}
+		videoId={videoData.video.id}
+		title={videoData.video.name}
+	/>
 
 	<section>
 		{#if videoData.pages && videoData.pages.length > 0}

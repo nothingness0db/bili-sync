@@ -81,6 +81,7 @@ tokio-stream = { version = "0.1.18", features = ["sync"] }
 tokio-util = { version = "0.7.18", features = ["io", "rt"] }
 toml = "1.1.2"
 tower = "0.5.3"
+tower-http = { version = "0.6.11", features = ["fs"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["chrono", "json"] }
 ua_generator = { version = "0.5.70", default-features = false }

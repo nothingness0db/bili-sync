@@ -4,7 +4,11 @@ use std::sync::LazyLock;
 
 use clap::Parser;
 
+#[cfg(not(test))]
 pub static ARGS: LazyLock<Args> = LazyLock::new(Args::parse);
+// libtest 的测试筛选和运行参数不能交给应用的 clap 解析器。
+#[cfg(test)]
+pub static ARGS: LazyLock<Args> = LazyLock::new(|| Args::parse_from(["bili-sync"]));
 
 #[derive(Parser)]
 #[command(name = "Bili-Sync", version = detail_version(), about, long_about = None)]

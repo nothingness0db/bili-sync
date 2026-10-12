@@ -34,6 +34,9 @@ use crate::utils::status::{PageStatus, VideoStatus};
 use crate::workflow::detect_deleted_videos;
 use crate::workflow_dynamic::ensure_mixin_key;
 
+mod playback;
+pub(super) use playback::stream_router;
+
 /// 防连点：同一时刻只允许一个手动删除检测任务
 static SCAN_DEAD_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
@@ -71,6 +74,7 @@ pub(super) fn router() -> Router {
     Router::new()
         .route("/videos", get(get_videos))
         .route("/videos/{id}", get(get_video))
+        .route("/videos/{id}/playback", post(playback::create_playback))
         .route("/videos/scan-deleted", post(scan_deleted_videos))
         .route(
             "/videos/{id}/clear-and-reset-status",

@@ -36,6 +36,7 @@ import type {
 	UpdateVideoStatusRequest,
 	UpdateVideoStatusResponse,
 	UppersResponse,
+	VideoPlaybackResponse,
 	VideoResponse,
 	VideoSourcesDetailsResponse,
 	VideoSourcesResponse,
@@ -259,6 +260,10 @@ class ApiClient {
 		return this.get<VideoResponse>(`/videos/${id}`);
 	}
 
+	async createVideoPlayback(id: number): Promise<ApiResponse<VideoPlaybackResponse>> {
+		return this.post<VideoPlaybackResponse>(`/videos/${id}/playback`, null);
+	}
+
 	async resetVideoStatus(
 		id: number,
 		request: ResetVideoStatusRequest
@@ -439,6 +444,7 @@ const api = {
 	getDynamicDetail: (id: number, dynId: string) => apiClient.getDynamicDetail(id, dynId),
 	getVideos: (params?: VideosRequest) => apiClient.getVideos(params),
 	getVideo: (id: number) => apiClient.getVideo(id),
+	createVideoPlayback: (id: number) => apiClient.createVideoPlayback(id),
 	resetVideoStatus: (id: number, request: ResetVideoStatusRequest) =>
 		apiClient.resetVideoStatus(id, request),
 	scanDeletedVideos: (submissionIds: number[]) => apiClient.scanDeletedVideos(submissionIds),

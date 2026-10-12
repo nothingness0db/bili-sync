@@ -41,7 +41,9 @@ pub fn router() -> Router {
             .merge(dashboard::router())
             .merge(ws::router())
             .merge(task::router())
-            .layer(middleware::from_fn(auth)),
+            .layer(middleware::from_fn(auth))
+            // 浏览器播放器使用限时播放凭据；创建凭据仍需通过上面的登录鉴权。
+            .merge(videos::stream_router()),
     )
 }
 
