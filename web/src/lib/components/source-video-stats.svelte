@@ -82,9 +82,10 @@
 				>
 				<Table.Body
 					>{#each data.videos as video (video.bvid)}<Table.Row>
-							<Table.Cell class="min-w-[220px] max-w-[360px]"
-								><a href={`/video-stats/${video.bvid}`} class="block font-medium hover:underline"
-									>{video.title}</a
+							<Table.Cell class="max-w-[360px] min-w-[220px]"
+								><a
+									href={`/video-stats/${video.bvid}?source=${sourceId}`}
+									class="block font-medium hover:underline">{video.title}</a
 								><span class="text-muted-foreground text-xs">{video.bvid}</span></Table.Cell
 							>
 							<Table.Cell class="text-right tabular-nums"
@@ -100,7 +101,7 @@
 							><Table.Cell class="text-right tabular-nums"
 								>{growth(video.growth.likeCount)}</Table.Cell
 							>
-							<Table.Cell class="whitespace-nowrap text-xs text-muted-foreground"
+							<Table.Cell class="text-muted-foreground text-xs whitespace-nowrap"
 								>{new Date(video.latest.recordedAt).toLocaleString('zh-CN')}</Table.Cell
 							>
 						</Table.Row>{/each}</Table.Body

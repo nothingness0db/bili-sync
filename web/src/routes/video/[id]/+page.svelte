@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
 	import { onMount, onDestroy } from 'svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import api from '$lib/api';
@@ -34,10 +33,13 @@
 		const sequence = ++videoSequence;
 		videoData = null;
 		playbackOpen = false;
+		statusEditorOpen = false;
+		resetDialogOpen = false;
+		clearAndResetDialogOpen = false;
 		error = null;
 		loading = false;
-		const videoId = parseInt($page.params.id!);
-		if (isNaN(videoId)) {
+		const videoId = Number($page.params.id);
+		if (!Number.isSafeInteger(videoId) || videoId <= 0) {
 			error = '无效的视频 ID';
 			toast.error('无效的视频 ID');
 			return;
@@ -71,6 +73,8 @@
 	onDestroy(() => {
 		videoSequence += 1;
 	});
+
+	$: videosHref = `/${ToQuery($appStateStore)}`;
 
 	// 监听路由参数变化
 	$: if ($page.params.id) {
@@ -161,6 +165,10 @@
 	<title>{videoData?.video.name || '视频详情'} - Bili Sync</title>
 </svelte:head>
 
+<div class="mb-4">
+	<Button size="sm" variant="outline" href={videosHref}>返回视频列表</Button>
+</div>
+
 {#if loading}
 	<div class="flex items-center justify-center py-12">
 		<div class="text-muted-foreground">加载中...</div>
@@ -170,12 +178,6 @@
 		<div class="space-y-2 text-center">
 			<p role="alert" class="text-destructive">{error}</p>
 			<Button size="sm" variant="outline" onclick={loadVideoDetail}>重新加载</Button>
-			<button
-				class="text-muted-foreground hover:text-foreground text-sm transition-colors"
-				onclick={() => goto('/')}
-			>
-				返回首页
-			</button>
 		</div>
 	</div>
 {:else if videoData}
@@ -268,7 +270,7 @@
 
 				<div
 					class="grid gap-4"
-					style="grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));"
+					style="grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));"
 				>
 					{#each videoData.pages as pageInfo (pageInfo.id)}
 						<VideoCard

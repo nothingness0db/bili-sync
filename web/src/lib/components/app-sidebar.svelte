@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import BotIcon from '@lucide/svelte/icons/bot';
 	import ChartPieIcon from '@lucide/svelte/icons/chart-pie';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
@@ -91,6 +92,23 @@
 		]
 	};
 
+	function isActive(href: string): boolean {
+		const pathname = page.url.pathname.replace(/\/$/, '') || '/';
+		const sourceId = Number(page.url.searchParams.get('source'));
+		const hasSource = Number.isSafeInteger(sourceId) && sourceId > 0;
+		if (href === '/videos') {
+			return (
+				pathname === '/videos' ||
+				pathname.startsWith('/video/') ||
+				(pathname.startsWith('/video-stats/') && !hasSource)
+			);
+		}
+		if (href === '/dynamic-sources' && pathname.startsWith('/video-stats/')) {
+			return hasSource;
+		}
+		return pathname === href || (href !== '/' && pathname.startsWith(`${href}/`));
+	}
+
 	const closeMobileSidebar = () => {
 		if (sidebar.isMobile) {
 			sidebar.setOpenMobile(false);
@@ -127,9 +145,14 @@
 				<Sidebar.Menu>
 					{#each group.items as item (item.title)}
 						<Sidebar.MenuItem>
-							<Sidebar.MenuButton class="h-8">
+							<Sidebar.MenuButton class="h-8" isActive={isActive(item.href)}>
 								{#snippet child({ props })}
-									<a href={item.href} {...props} onclick={closeMobileSidebar}>
+									<a
+										href={item.href}
+										{...props}
+										aria-current={isActive(item.href) ? 'page' : undefined}
+										onclick={closeMobileSidebar}
+									>
 										<item.icon class="size-4" />
 										<span class="text-sm">{item.title}</span>
 									</a>
@@ -162,9 +185,14 @@
 			</Sidebar.MenuItem>
 			{#each data.footer as item (item.title)}
 				<Sidebar.MenuItem>
-					<Sidebar.MenuButton class="h-8">
+					<Sidebar.MenuButton class="h-8" isActive={isActive(item.href)}>
 						{#snippet child({ props })}
-							<a href={item.href} {...props} onclick={closeMobileSidebar}>
+							<a
+								href={item.href}
+								{...props}
+								aria-current={isActive(item.href) ? 'page' : undefined}
+								onclick={closeMobileSidebar}
+							>
 								<item.icon class="size-4" />
 								<span class="text-sm">{item.title}</span>
 							</a>

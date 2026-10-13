@@ -1,14 +1,14 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { page } from '$app/state';
+	import { onDestroy } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
+	import { page } from '$app/stores';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip/index.js';
-	import * as Dialog from '$lib/components/ui/dialog/index.js';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
 	import Pagination from '$lib/components/pagination.svelte';
-	import AuthenticatedDynamicImage from '$lib/components/authenticated-dynamic-image.svelte';
+	import DynamicDetailDialog from '$lib/components/dynamic-detail-dialog.svelte';
 	import * as Chart from '$lib/components/ui/chart/index.js';
 	import MyChartTooltip from '$lib/components/custom/my-chart-tooltip.svelte';
 	import { AreaChart } from 'layerchart';
@@ -23,19 +23,15 @@
 	import { toast } from 'svelte-sonner';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { setBreadcrumb } from '$lib/stores/breadcrumb';
-	import type {
-		ApiError,
-		DynamicDetailResponse,
-		DynamicListItem,
-		DynamicStatsResponse,
-		ReplyItem,
-		StatPoint
-	} from '$lib/types';
+	import type { ApiError, DynamicListItem, DynamicStatsResponse, StatPoint } from '$lib/types';
 	import api from '$lib/api';
 	import SourceVideoStats from '$lib/components/source-video-stats.svelte';
 	import SourceElecStats from '$lib/components/source-elec-stats.svelte';
 
-	let sourceId = Number(page.params.id);
+	let sourceId = 0;
+	let dataSequence = 0;
+	let lastDetailTarget = '';
+	let loadError: string | null = null;
 	let stats: DynamicStatsResponse | null = null;
 	let statsRevision = 0;
 	let dynamics: DynamicListItem[] = [];
@@ -81,32 +77,11 @@
 		return [new Date(end.getTime() - rangeDays * 24 * 3600 * 1000), end];
 	}
 
-	// 动态详情对话框
 	let showDetailDialog = false;
-	let detailLoading = false;
-	let detail: DynamicDetailResponse | null = null;
-
-	async function openDetail(dynId: string) {
+	let detailDynamicId = '';
+	function openDetail(dynId: string) {
+		detailDynamicId = dynId;
 		showDetailDialog = true;
-		detailLoading = true;
-		detail = null;
-		try {
-			const response = await api.getDynamicDetail(sourceId, dynId);
-			detail = response.data;
-		} catch (error) {
-			toast.error('加载动态详情失败', {
-				description: (error as ApiError).message
-			});
-			showDetailDialog = false;
-		} finally {
-			detailLoading = false;
-		}
-	}
-
-	function statCount(stat: Record<string, unknown> | undefined, key: string): number {
-		if (!stat) return 0;
-		const v = stat[key] as { count?: number } | undefined;
-		return v?.count ?? 0;
 	}
 
 	// 指标配置（七个折线图），totalVideoCount 由后端计算（视频投稿 + 仅动态视频）
@@ -143,39 +118,48 @@
 	}
 
 	async function loadData() {
+		const current = ++dataSequence;
+		const target = sourceId;
 		loading = true;
+		loadError = null;
 		try {
 			const [statsResponse, dynamicsResponse] = await Promise.all([
-				api.getDynamicSourceStats(sourceId),
-				api.getDynamicSourceDynamics(sourceId, dynamicPage, dynamicPageSize)
+				api.getDynamicSourceStats(target),
+				api.getDynamicSourceDynamics(target, dynamicPage, dynamicPageSize)
 			]);
+			if (current !== dataSequence) return;
 			stats = statsResponse.data;
 			statsRevision += 1;
 			dynamics = dynamicsResponse.data.dynamics;
 			dynamicTotalCount = dynamicsResponse.data.totalCount;
 			setBreadcrumb([{ label: '动态源', href: '/dynamic-sources' }, { label: stats.upperName }]);
 		} catch (error) {
+			if (current !== dataSequence) return;
+			loadError = (error as ApiError).message;
 			toast.error('加载数据失败', {
 				description: (error as ApiError).message
 			});
 		} finally {
-			loading = false;
+			if (current === dataSequence) loading = false;
 		}
 	}
 
 	async function loadDynamicPage(nextPage: number) {
+		const current = ++dataSequence;
 		dynamicPage = nextPage;
 		loading = true;
 		try {
 			const response = await api.getDynamicSourceDynamics(sourceId, nextPage, dynamicPageSize);
+			if (current !== dataSequence) return;
 			dynamics = response.data.dynamics;
 			dynamicTotalCount = response.data.totalCount;
 		} catch (error) {
+			if (current !== dataSequence) return;
 			toast.error('加载动态列表失败', {
 				description: (error as ApiError).message
 			});
 		} finally {
-			loading = false;
+			if (current === dataSequence) loading = false;
 		}
 	}
 
@@ -251,10 +235,34 @@
 		}
 	}
 
-	onMount(() => {
-		loadData();
-		const dynamicId = page.url.searchParams.get('dynamic');
-		if (dynamicId) void openDetail(dynamicId);
+	onDestroy(() => {
+		dataSequence += 1;
+	});
+	afterNavigate(() => {
+		const nextSourceId = Number($page.params.id);
+		if (sourceId !== nextSourceId) {
+			sourceId = nextSourceId;
+			stats = null;
+			dynamics = [];
+			dynamicPage = 0;
+			dynamicTotalCount = 0;
+			showDetailDialog = false;
+			lastDetailTarget = '';
+			setBreadcrumb([{ label: '动态源', href: '/dynamic-sources' }, { label: '动态源详情' }]);
+			if (Number.isSafeInteger(sourceId) && sourceId > 0) void loadData();
+			else {
+				dataSequence += 1;
+				loading = false;
+				loadError = '无效的动态源 ID';
+			}
+		}
+		const dynamicId = $page.url.searchParams.get('dynamic');
+		const target = `${sourceId}:${dynamicId ?? ''}`;
+		if (target !== lastDetailTarget) {
+			lastDetailTarget = target;
+			if (dynamicId && Number.isSafeInteger(sourceId) && sourceId > 0) openDetail(dynamicId);
+			else showDetailDialog = false;
+		}
 	});
 </script>
 
@@ -266,6 +274,12 @@
 	{#if loading && !stats}
 		<div class="flex items-center justify-center py-12">
 			<div class="text-muted-foreground">加载中...</div>
+		</div>
+	{:else if loadError && !stats}
+		<div role="alert" class="space-y-3 py-12 text-center">
+			<p class="text-destructive">加载失败：{loadError}</p>
+			<Button size="sm" variant="outline" onclick={loadData}>重试</Button>
+			<Button size="sm" variant="outline" href="/dynamic-sources">返回动态源</Button>
 		</div>
 	{:else if stats}
 		<!-- 账号信息 -->
@@ -583,135 +597,5 @@
 		</AlertDialog.Content>
 	</AlertDialog.Root>
 
-	<!-- 动态详情对话框：正文 + 评论树 -->
-	<Dialog.Root bind:open={showDetailDialog}>
-		<Dialog.Content
-			class="no-scrollbar max-h-[85vh] max-w-[90vw]! overflow-y-auto lg:max-w-[60vw]!"
-		>
-			<Dialog.Title class="text-lg font-semibold">动态详情</Dialog.Title>
-			{#if detailLoading}
-				<div class="flex items-center justify-center py-12">
-					<div class="text-muted-foreground">加载中...</div>
-				</div>
-			{:else if detail}
-				<div class="mt-4 space-y-4">
-					<!-- 动态元信息 -->
-					<div class="flex flex-wrap items-center gap-2 text-sm">
-						<Badge variant="secondary" class="font-mono text-xs">
-							{detail.dynType.replace('DYNAMIC_TYPE_', '')}
-						</Badge>
-						<span class="text-muted-foreground">
-							{new Date(detail.pubTs).toLocaleString('zh-CN')}
-						</span>
-						<Badge variant="secondary" class="flex items-center gap-1">
-							<MessagesSquareIcon class="h-3 w-3" />
-							评论 {statCount(detail.stat, 'comment')}
-						</Badge>
-						<Badge variant="secondary">赞 {statCount(detail.stat, 'like')}</Badge>
-						<Badge variant="secondary">转 {statCount(detail.stat, 'forward')}</Badge>
-						{#if detail.location}
-							<Badge variant="secondary">📍 {detail.location}</Badge>
-						{/if}
-						<span class="text-muted-foreground font-mono text-xs">{detail.id}</span>
-					</div>
-					<!-- 正文 -->
-					{#if detail.content}
-						<div class="bg-muted/50 rounded-lg p-4 text-sm leading-relaxed whitespace-pre-wrap">
-							{detail.content}
-						</div>
-					{:else}
-						<div class="text-muted-foreground text-sm">（该动态无正文文本）</div>
-					{/if}
-					<!-- 图片 -->
-					{#if detail.pics.length > 0}
-						<div>
-							<div class="mb-2 text-sm font-medium">图片（{detail.pics.length}）</div>
-							<div class="flex flex-wrap gap-3">
-								{#each detail.pics as _, i (detail.id + '-' + i)}
-									<AuthenticatedDynamicImage
-										{sourceId}
-										dynamicId={detail.id}
-										name={`pics/${String(i + 1).padStart(2, '0')}.jpg`}
-										alt={`图片 ${i + 1}`}
-										className="max-h-64 max-w-full rounded-lg border object-contain"
-									/>
-								{/each}
-							</div>
-						</div>
-					{/if}
-					<!-- 本地文件路径 -->
-					{#if detail.path}
-						<div class="text-muted-foreground font-mono text-xs">
-							落盘位置: {detail.path}
-						</div>
-					{/if}
-					<!-- 评论树 -->
-					<div>
-						<div class="mb-2 flex items-center gap-2">
-							<MessagesSquareIcon class="h-4 w-4" />
-							<span class="text-sm font-medium">评论（{detail.replies.length}）</span>
-						</div>
-						{#if detail.replies.length > 0}
-							<div class="space-y-4">
-								{#each detail.replies as reply (reply.rpid)}
-									{@render ReplyRow({ reply })}
-								{/each}
-							</div>
-						{:else}
-							<div class="text-muted-foreground py-6 text-center text-sm">暂无评论</div>
-						{/if}
-					</div>
-				</div>
-			{/if}
-		</Dialog.Content>
-	</Dialog.Root>
+	<DynamicDetailDialog bind:open={showDetailDialog} {sourceId} dynamicId={detailDynamicId} />
 </div>
-
-{#snippet ReplyRow({ reply, depth = 0 }: { reply: ReplyItem; depth?: number })}
-	<div class="flex gap-3" style="margin-left: {depth * 24}px">
-		{#if reply.avatar}
-			<img src={reply.avatar} alt={reply.uname} class="h-8 w-8 shrink-0 rounded-full" />
-		{:else}
-			<div class="bg-muted flex h-8 w-8 shrink-0 items-center justify-center rounded-full">
-				<UserIcon class="text-muted-foreground h-4 w-4" />
-			</div>
-		{/if}
-		<div class="min-w-0 flex-1">
-			<div class="flex flex-wrap items-center gap-2 text-xs">
-				<span class="font-medium">{reply.uname}</span>
-				{#if !reply.valid}
-					<Badge variant="secondary" class="text-[10px]">B 站已失效，本地保留</Badge>
-				{/if}
-				<span class="text-muted-foreground">
-					{new Date(reply.ctime).toLocaleString('zh-CN')}
-				</span>
-				{#if reply.parentRpid}
-					<Badge variant="secondary" class="text-[10px]">楼中楼</Badge>
-				{/if}
-			</div>
-			<div class="text-muted-foreground mt-1 text-sm break-words">
-				{reply.content || '（无内容）'}
-			</div>
-			{#if reply.images.length > 0}
-				<div class="mt-1 flex flex-wrap gap-2">
-					{#each reply.images as _, i (detail!.id + '-' + reply.rpid + '-' + i)}
-						<AuthenticatedDynamicImage
-							{sourceId}
-							dynamicId={detail!.id}
-							name={`comments/${reply.rpid}_${i + 1}.jpg`}
-							alt="评论图片"
-							className="h-24 max-w-48 rounded-md border object-cover"
-						/>
-					{/each}
-				</div>
-			{/if}
-			{#if reply.subReplies.length > 0}
-				<div class="mt-2 space-y-3">
-					{#each reply.subReplies as sub (sub.rpid)}
-						{@render ReplyRow({ reply: sub, depth: depth + 1 })}
-					{/each}
-				</div>
-			{/if}
-		</div>
-	</div>
-{/snippet}

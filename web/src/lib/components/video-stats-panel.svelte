@@ -6,6 +6,7 @@
 	import { curveLinear } from 'd3-shape';
 	import api from '$lib/api';
 	import type { ApiError, VideoMetrics, VideoStatsResponse } from '$lib/types';
+	import DynamicDetailDialog from '$lib/components/dynamic-detail-dialog.svelte';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 
 	let { bvid, showTitle = false }: { bvid: string; showTitle?: boolean } = $props();
@@ -15,6 +16,13 @@
 	let days = $state<number | null>(7);
 	let selected = $state<keyof VideoMetrics>('viewCount');
 	let sequence = 0;
+	let commentsOpen = $state(false);
+	let selectedDynamic = $state<VideoStatsResponse['relatedDynamics'][number] | null>(null);
+	$effect(() => {
+		void bvid;
+		commentsOpen = false;
+		selectedDynamic = null;
+	});
 	const ranges = [
 		{ label: '7天', days: 7 },
 		{ label: '30天', days: 30 },
@@ -126,7 +134,7 @@
 			<div class="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
 				{#each metrics as m (m.key)}
 					<button
-						class="rounded-md border p-3 text-left transition-colors hover:bg-muted/50 {selected ===
+						class="hover:bg-muted/50 rounded-md border p-3 text-left transition-colors {selected ===
 						m.key
 							? 'border-primary bg-primary/5'
 							: ''}"
@@ -145,7 +153,7 @@
 					</button>
 				{/each}
 			</div>
-			<div class="mb-3 flex flex-wrap justify-between gap-2 text-xs text-muted-foreground">
+			<div class="text-muted-foreground mb-3 flex flex-wrap justify-between gap-2 text-xs">
 				<span>{metric.label}趋势 · 范围内 {data.sampleCount.toLocaleString()} 次采样</span>
 				<span>最近采样：{date(data.latest.recordedAt)}</span>
 			</div>
@@ -181,15 +189,35 @@
 		{/if}
 		{#if data.relatedDynamics.length}
 			<div class="mt-5 border-t pt-4">
-				<h3 class="mb-2 text-sm font-medium">关联动态与评论</h3>
+				<h3 class="mb-2 text-sm font-medium">关联动态评论</h3>
+				<p class="text-muted-foreground mb-3 text-xs">
+					点击查看本地保存的关联动态评论及楼中楼回复。
+				</p>
 				<div class="flex flex-wrap gap-2">
-					{#each data.relatedDynamics as dynamic (dynamic.id)}<a
-							class="rounded-md border px-3 py-2 text-sm hover:bg-muted/50"
-							href={`/dynamic-sources/${dynamic.sourceId}?dynamic=${dynamic.id}`}
-							>{dynamic.upperName} · 本地有效评论 {dynamic.replyCount}</a
+					{#each data.relatedDynamics as dynamic (dynamic.id)}<button
+							type="button"
+							class="hover:bg-muted/50 rounded-md border px-3 py-2 text-sm"
+							onclick={() => {
+								selectedDynamic = dynamic;
+								commentsOpen = true;
+							}}>{dynamic.upperName} · 查看评论（{dynamic.replyCount} 条有效）</button
 						>{/each}
 				</div>
 			</div>
+		{:else}
+			<p class="text-muted-foreground mt-5 border-t pt-4 text-sm">
+				暂无关联动态评论，关联动态同步后可在这里查看。
+			</p>
 		{/if}
 	{/if}
 </section>
+
+{#if selectedDynamic}
+	<DynamicDetailDialog
+		bind:open={commentsOpen}
+		sourceId={selectedDynamic.sourceId}
+		dynamicId={selectedDynamic.id}
+		title="关联动态评论"
+		description={`${selectedDynamic.upperName} · 当前视频关联动态的本地评论及楼中楼回复。`}
+	/>
+{/if}

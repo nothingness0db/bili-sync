@@ -196,7 +196,7 @@
 					</p>
 				{:else}<div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
 						{#each board.members as member (member.payMid)}<a
-								class="flex items-center gap-3 rounded-md border p-3 hover:bg-muted/50"
+								class="hover:bg-muted/50 flex items-center gap-3 rounded-md border p-3"
 								href={`https://space.bilibili.com/${member.payMid}`}
 								target="_blank"
 								rel="noreferrer"
@@ -245,11 +245,11 @@
 				><Table.Body
 					>{#each data.history as item (item.snapshot.id)}<Table.Row
 							class={selected?.snapshot.id === item.snapshot.id ? 'bg-muted/50' : ''}
-							><Table.Cell class="whitespace-nowrap text-xs"
+							><Table.Cell class="text-xs whitespace-nowrap"
 								>{date(item.snapshot.recordedAt)}</Table.Cell
 							><Table.Cell class="tabular-nums">{total(item.snapshot)}</Table.Cell><Table.Cell
 								class="tabular-nums">{item.snapshot.listedCount ?? '—'}</Table.Cell
-							><Table.Cell class="whitespace-nowrap text-xs"
+							><Table.Cell class="text-xs whitespace-nowrap"
 								>{item.comparisonAvailable
 									? `进榜 ${item.entered.length} · 离榜 ${item.left.length} · 名次变化 ${item.rankChanges.length}`
 									: '无可比榜单'}</Table.Cell

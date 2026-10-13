@@ -451,7 +451,7 @@
 </script>
 
 <svelte:head>
-	<title>主页 - Bili Sync</title>
+	<title>视频 - Bili Sync</title>
 </svelte:head>
 
 {#if videoSourcesError}
@@ -463,7 +463,7 @@
 	</div>
 {/if}
 
-<div class="mb-4 flex items-center justify-between">
+<div class="mb-4 flex flex-wrap items-center justify-between gap-3">
 	<SearchBar
 		placeholder="搜索视频标题或 BV 号.."
 		value={$appStateStore.query}
@@ -473,7 +473,7 @@
 			goto(`/${ToQuery($appStateStore)}`);
 		}}
 	></SearchBar>
-	<div class="flex items-center gap-3">
+	<div class="flex flex-wrap items-center gap-3">
 		<div class="flex items-center gap-1">
 			<span class="text-muted-foreground text-xs">创建时间:</span>
 			<CreatedTimeFilter
@@ -555,13 +555,15 @@
 </div>
 
 {#if videosData}
-	<div class="mb-6 flex items-center justify-between">
+	<div class="mb-6 flex flex-wrap items-center justify-between gap-3">
 		<div class="flex items-center gap-6">
 			<div class=" text-sm font-medium">
 				共 {videosData.total_count} 个视频
 			</div>
 			<div class=" text-sm font-medium">
-				当前第 {$appStateStore.currentPage + 1} / {totalPages} 页
+				{totalPages > 0
+					? `当前第 ${$appStateStore.currentPage + 1} / ${totalPages} 页`
+					: '暂无视频'}
 			</div>
 		</div>
 		<div class="flex items-center gap-2">

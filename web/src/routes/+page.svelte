@@ -224,9 +224,9 @@
 				{#if anyTaskRunning}
 					<span class="relative flex h-2 w-2">
 						<span
-							class="bg-emerald-400 absolute inline-flex h-full w-full animate-ping rounded-full opacity-75"
+							class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"
 						></span>
-						<span class="bg-emerald-500 relative inline-flex h-2 w-2 rounded-full"></span>
+						<span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
 					</span>
 				{/if}
 			</span>
