@@ -82,10 +82,11 @@
 				>
 				<Table.Body
 					>{#each data.videos as video (video.bvid)}<Table.Row>
-							<Table.Cell class="max-w-[360px] min-w-[220px]"
+							<Table.Cell class="max-w-[360px] min-w-[220px] whitespace-normal"
 								><a
 									href={`/video-stats/${video.bvid}?source=${sourceId}`}
-									class="block font-medium hover:underline">{video.title}</a
+									class="block leading-relaxed font-medium [overflow-wrap:anywhere] break-words hover:underline"
+									>{video.title}</a
 								><span class="text-muted-foreground text-xs">{video.bvid}</span></Table.Cell
 							>
 							<Table.Cell class="text-right tabular-nums"

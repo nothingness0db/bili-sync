@@ -4,6 +4,8 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import * as Table from '$lib/components/ui/table/index.js';
 	import * as Chart from '$lib/components/ui/chart/index.js';
+	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
+	import { ChevronDownIcon } from '@lucide/svelte';
 	import MyChartTooltip from '$lib/components/custom/my-chart-tooltip.svelte';
 	import Pagination from '$lib/components/pagination.svelte';
 	import { AreaChart } from 'layerchart';
@@ -16,6 +18,7 @@
 	let days = $state<number | null>(7);
 	let currentPage = $state(0);
 	let selected = $state<ElecHistory | null>(null);
+	let historyOpen = $state(false);
 	let metric = $state<'total' | 'listedCount'>('total');
 	let sequence = 0;
 	const ranges = [
@@ -233,48 +236,65 @@
 					</div>{/if}
 			</div>
 		{/if}
-		<div class="mt-5 overflow-x-auto">
-			<Table.Root
-				><Table.Header
-					><Table.Row
-						><Table.Head>采样时间</Table.Head><Table.Head>累计人数</Table.Head><Table.Head
-							>接口在榜</Table.Head
-						><Table.Head>榜单变化</Table.Head><Table.Head class="text-right">查看</Table.Head
-						></Table.Row
-					></Table.Header
-				><Table.Body
-					>{#each data.history as item (item.snapshot.id)}<Table.Row
-							class={selected?.snapshot.id === item.snapshot.id ? 'bg-muted/50' : ''}
-							><Table.Cell class="text-xs whitespace-nowrap"
-								>{date(item.snapshot.recordedAt)}</Table.Cell
-							><Table.Cell class="tabular-nums">{total(item.snapshot)}</Table.Cell><Table.Cell
-								class="tabular-nums">{item.snapshot.listedCount ?? '—'}</Table.Cell
-							><Table.Cell class="text-xs whitespace-nowrap"
-								>{item.comparisonAvailable
-									? `进榜 ${item.entered.length} · 离榜 ${item.left.length} · 名次变化 ${item.rankChanges.length}`
-									: '无可比榜单'}</Table.Cell
-							><Table.Cell class="text-right"
-								><Button
-									size="sm"
-									variant="outline"
-									class="h-7 text-xs"
-									aria-pressed={selected?.snapshot.id === item.snapshot.id}
-									aria-label={`查看 ${date(item.snapshot.recordedAt)} 的充电榜`}
-									onclick={() => (selected = item)}>查看榜单</Button
-								></Table.Cell
-							></Table.Row
-						>{/each}</Table.Body
-				></Table.Root
+		<Collapsible.Root bind:open={historyOpen} class="mt-5 border-t pt-4">
+			<Collapsible.Trigger
+				class="hover:bg-accent/50 flex w-full items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm font-medium transition-colors"
 			>
-		</div>
-		<Pagination
-			{currentPage}
-			totalPages={Math.ceil(data.sampleCount / 20)}
-			onPageChange={(page) => (currentPage = page)}
-		/>
-		<p class="text-muted-foreground mt-3 text-xs">
-			进出榜仅表示返回的 Top 榜变化，不能据此判断续费或停充；金额和流水不在此接口中。
-		</p>
+				<span class="flex flex-wrap items-center gap-x-2 gap-y-1 text-left">
+					<span>采样记录与榜单变化</span>
+					<span class="text-muted-foreground text-xs font-normal">共 {data.sampleCount} 次采样</span
+					>
+				</span>
+				<span class="text-muted-foreground flex shrink-0 items-center gap-1 text-xs font-normal">
+					{historyOpen ? '收起' : '展开'}
+					<ChevronDownIcon class="h-4 w-4 transition-transform {historyOpen ? 'rotate-180' : ''}" />
+				</span>
+			</Collapsible.Trigger>
+			<Collapsible.Content>
+				<div class="mt-3 overflow-x-auto">
+					<Table.Root
+						><Table.Header
+							><Table.Row
+								><Table.Head>采样时间</Table.Head><Table.Head>累计人数</Table.Head><Table.Head
+									>接口在榜</Table.Head
+								><Table.Head>榜单变化</Table.Head><Table.Head class="text-right">查看</Table.Head
+								></Table.Row
+							></Table.Header
+						><Table.Body
+							>{#each data.history as item (item.snapshot.id)}<Table.Row
+									class={selected?.snapshot.id === item.snapshot.id ? 'bg-muted/50' : ''}
+									><Table.Cell class="text-xs whitespace-nowrap"
+										>{date(item.snapshot.recordedAt)}</Table.Cell
+									><Table.Cell class="tabular-nums">{total(item.snapshot)}</Table.Cell><Table.Cell
+										class="tabular-nums">{item.snapshot.listedCount ?? '—'}</Table.Cell
+									><Table.Cell class="text-xs whitespace-nowrap"
+										>{item.comparisonAvailable
+											? `进榜 ${item.entered.length} · 离榜 ${item.left.length} · 名次变化 ${item.rankChanges.length}`
+											: '无可比榜单'}</Table.Cell
+									><Table.Cell class="text-right"
+										><Button
+											size="sm"
+											variant="outline"
+											class="h-7 text-xs"
+											aria-pressed={selected?.snapshot.id === item.snapshot.id}
+											aria-label={`查看 ${date(item.snapshot.recordedAt)} 的充电榜`}
+											onclick={() => (selected = item)}>查看榜单</Button
+										></Table.Cell
+									></Table.Row
+								>{/each}</Table.Body
+						></Table.Root
+					>
+				</div>
+				<Pagination
+					{currentPage}
+					totalPages={Math.ceil(data.sampleCount / 20)}
+					onPageChange={(page) => (currentPage = page)}
+				/>
+				<p class="text-muted-foreground mt-3 text-xs">
+					进出榜仅表示返回的 Top 榜变化，不能据此判断续费或停充；金额和流水不在此接口中。
+				</p>
+			</Collapsible.Content>
+		</Collapsible.Root>
 	{:else}<p class="text-muted-foreground py-6 text-center text-sm">
 			尚无充电榜快照，下一次账号同步会开始采集。
 		</p>{/if}
