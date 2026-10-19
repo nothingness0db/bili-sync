@@ -61,11 +61,18 @@
 	function getOverallStatus(
 		downloadStatus: number[],
 		shouldDownload: boolean,
-		valid: boolean
+		valid: boolean,
+		deletedAt?: string | null
 	): {
 		text: string;
 		style: string;
 	} {
+		if (deletedAt) {
+			return {
+				text: '已删除',
+				style: 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-200'
+			};
+		}
 		if (!valid) {
 			// 视频属性表明已失效，或由于各种条件判断（充电视频等）判定为无效的情况
 			return { text: '失效', style: 'bg-gray-100 text-gray-700' };
@@ -98,7 +105,12 @@
 		return defaultTaskNames[index] || `任务${index + 1}`;
 	}
 
-	$: overallStatus = getOverallStatus(video.download_status, video.should_download, video.valid);
+	$: overallStatus = getOverallStatus(
+		video.download_status,
+		video.should_download,
+		video.valid,
+		video.deleted_at
+	);
 	$: completed = video.download_status.filter((status) => status === 7).length;
 	$: total = video.download_status.length;
 
@@ -153,10 +165,10 @@
 				{overallStatus.text}
 			</Badge>
 		</div>
-		{#if !video.valid && deletedAtText}
+		{#if deletedAtText}
 			<div class="text-destructive mt-1.5 flex items-center gap-1 text-xs">
 				<TrashIcon class="h-3 w-3 shrink-0" />
-				<span class="min-w-0 truncate" title={deletedAtText}>已删除于 {deletedAtText}</span>
+				<span class="min-w-0 truncate" title={deletedAtText}>确认删除于 {deletedAtText}</span>
 			</div>
 		{/if}
 		{#if displaySubtitle}

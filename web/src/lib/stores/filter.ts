@@ -1,7 +1,7 @@
 import { writable } from 'svelte/store';
 
 export type StatusFilterValue = 'failed' | 'succeeded' | 'waiting' | null;
-export type ValidationFilterValue = 'skipped' | 'invalid' | 'normal' | null;
+export type ValidationFilterValue = 'skipped' | 'invalid' | 'deleted' | 'normal' | null;
 
 export interface AppState {
 	query: string;

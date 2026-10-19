@@ -10,7 +10,7 @@ export interface VideosRequest {
 	watch_later?: number;
 	query?: string;
 	status_filter?: 'failed' | 'succeeded' | 'waiting';
-	validation_filter?: 'skipped' | 'invalid' | 'normal';
+	validation_filter?: 'skipped' | 'invalid' | 'deleted' | 'normal';
 	created_from?: string;
 	created_to?: string;
 	page?: number;
@@ -135,7 +135,7 @@ export interface UpdateFilteredVideoStatusRequest {
 	watch_later?: number;
 	query?: string;
 	status_filter?: 'failed' | 'succeeded' | 'waiting';
-	validation_filter?: 'skipped' | 'invalid' | 'normal';
+	validation_filter?: 'skipped' | 'invalid' | 'deleted' | 'normal';
 	created_from?: string;
 	created_to?: string;
 	video_updates?: StatusUpdate[];
@@ -153,7 +153,7 @@ export interface ResetFilteredVideoStatusRequest {
 	watch_later?: number;
 	query?: string;
 	status_filter?: 'failed' | 'succeeded' | 'waiting';
-	validation_filter?: 'skipped' | 'invalid' | 'normal';
+	validation_filter?: 'skipped' | 'invalid' | 'deleted' | 'normal';
 	created_from?: string;
 	created_to?: string;
 	force: boolean;

@@ -18,6 +18,7 @@ pub enum StatusFilter {
 pub enum ValidationFilter {
     Skipped,
     Invalid,
+    Deleted,
     Normal,
 }
 

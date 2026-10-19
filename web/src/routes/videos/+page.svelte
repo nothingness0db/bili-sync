@@ -101,7 +101,7 @@
 				description: `将扫描 ${result.data.scanned_sources} 个投稿源，任务会在当前任务结束后自动执行，结果见日志页`
 			});
 		} catch (error) {
-			console.error('检查已删除视频失败：', error);
+			console.error('检查视频状态失败：', error);
 			toast.error('检查失败', {
 				description: (error as ApiError).message
 			});
@@ -137,6 +137,7 @@
 		const validationFilter: ValidationFilterValue =
 			validationFilterParam === 'skipped' ||
 			validationFilterParam === 'invalid' ||
+			validationFilterParam === 'deleted' ||
 			validationFilterParam === 'normal'
 				? validationFilterParam
 				: null;
@@ -396,6 +397,7 @@
 			const validationLabels = {
 				skipped: '跳过',
 				invalid: '失效',
+				deleted: '已删除',
 				normal: '有效'
 			};
 			parts.push(`有效性：${validationLabels[state.validationFilter]}`);
@@ -607,7 +609,7 @@
 				disabled={scanningDeleted || !videoSources?.submission.length}
 			>
 				<SearchCheckIcon class="mr-1.5 h-3 w-3" />
-				检查已删除
+				检查删除/失效
 			</Button>
 		</div>
 	</div>
@@ -717,11 +719,12 @@
 <AlertDialog.Root bind:open={scanDeletedDialogOpen}>
 	<AlertDialog.Content>
 		<AlertDialog.Header>
-			<AlertDialog.Title>检查已删除视频</AlertDialog.Title>
+			<AlertDialog.Title>检查视频删除与失效</AlertDialog.Title>
 			<AlertDialog.Description>
-				拉取所选 UP 主当前的全部投稿列表，与本地记录对比，<strong>标记</strong>已从 B
-				站消失的视频（本地文件保留不动）。<br />
-				可到「有效性 → 失效」筛选查看结果。
+				比对所选 UP 主的投稿列表，并逐条确认缺失或已失效的视频。明确删除的标记为<strong
+					>已删除</strong
+				>， 其他不可用的视频标记为<strong>失效</strong>，本地文件保留不动。<br />
+				可在「有效性」中分别筛选「已删除」和「失效」。
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 

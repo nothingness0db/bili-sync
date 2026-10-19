@@ -328,10 +328,10 @@
 					</CardContent>
 				</Card>
 
-				<!-- 删除检测任务 -->
+				<!-- 视频删除与失效检测任务 -->
 				<Card>
 					<CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle class="text-sm font-medium">删除检测</CardTitle>
+						<CardTitle class="text-sm font-medium">删除/失效检测</CardTitle>
 						<ScanSearchIcon class="text-muted-foreground h-4 w-4" />
 					</CardHeader>
 					<CardContent>

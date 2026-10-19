@@ -23,13 +23,16 @@ impl StatusFilter {
 impl ValidationFilter {
     pub fn to_video_query(&self) -> SimpleExpr {
         match self {
-            ValidationFilter::Invalid => video::Column::Valid.eq(false),
+            ValidationFilter::Deleted => video::Column::DeletedAt.is_not_null(),
+            ValidationFilter::Invalid => video::Column::Valid.eq(false).and(video::Column::DeletedAt.is_null()),
             ValidationFilter::Skipped => video::Column::Valid
                 .eq(true)
-                .and(video::Column::ShouldDownload.eq(false)),
+                .and(video::Column::ShouldDownload.eq(false))
+                .and(video::Column::DeletedAt.is_null()),
             ValidationFilter::Normal => video::Column::Valid
                 .eq(true)
-                .and(video::Column::ShouldDownload.eq(true)),
+                .and(video::Column::ShouldDownload.eq(true))
+                .and(video::Column::DeletedAt.is_null()),
         }
     }
 }
@@ -146,4 +149,55 @@ async fn execute_page_update_batch(
     );
     txn.execute_unprepared(&sql).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bili_sync_migration::{Migrator, MigratorTrait};
+    use chrono::Utc;
+    use sea_orm::{ActiveModelTrait, Database, EntityTrait, IntoActiveModel, QueryFilter, QueryOrder};
+
+    #[tokio::test]
+    async fn validity_filters_keep_deleted_and_unavailable_records_separate() -> anyhow::Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+        for (id, valid, should_download, deleted) in [
+            (1, true, true, false),
+            (2, true, false, false),
+            (3, false, true, false),
+            (4, false, true, true),
+            // 删除标记优先，旧数据的 valid 即使不一致，也不能混入有效或跳过筛选。
+            (5, true, false, true),
+        ] {
+            video::Model {
+                id,
+                bvid: format!("BVfilter{id}"),
+                valid,
+                should_download,
+                deleted_at: deleted.then(|| Utc::now().naive_utc()),
+                ..Default::default()
+            }
+            .into_active_model()
+            .insert(&db)
+            .await?;
+        }
+        for (filter, expected) in [
+            (ValidationFilter::Normal, vec![1]),
+            (ValidationFilter::Skipped, vec![2]),
+            (ValidationFilter::Invalid, vec![3]),
+            (serde_json::from_str::<ValidationFilter>("\"deleted\"")?, vec![4, 5]),
+        ] {
+            let ids = video::Entity::find()
+                .filter(filter.to_video_query())
+                .order_by_asc(video::Column::Id)
+                .all(&db)
+                .await?
+                .into_iter()
+                .map(|row| row.id)
+                .collect::<Vec<_>>();
+            assert_eq!(ids, expected);
+        }
+        Ok(())
+    }
 }

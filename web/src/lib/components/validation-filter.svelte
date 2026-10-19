@@ -38,6 +38,11 @@
 			value: 'invalid' as const,
 			label: '失效',
 			icon: TriangleAlertIcon
+		},
+		{
+			value: 'deleted' as const,
+			label: '已删除',
+			icon: TrashIcon
 		}
 	];
 
