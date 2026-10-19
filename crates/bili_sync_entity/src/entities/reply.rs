@@ -5,9 +5,10 @@ use sea_orm::entity::prelude::*;
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Eq, Default)]
 #[sea_orm(table_name = "reply")]
 pub struct Model {
-    #[sea_orm(primary_key)]
+    #[sea_orm(primary_key, auto_increment = false)]
     pub rpid: i64,
     /// 所属动态 id
+    #[sea_orm(primary_key, auto_increment = false)]
     pub dynamic_id: String,
     /// 楼中楼回复的父评论 rpid，顶级评论为 None
     pub parent_rpid: Option<i64>,

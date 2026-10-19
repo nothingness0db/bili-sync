@@ -553,9 +553,15 @@ mod tests {
         assert_eq!(video_availability::Entity::find().count(&db).await?, 2);
         assert_eq!(video_stat::Entity::find().count(&db).await?, 1);
         // 新迁移回滚不影响已有统计表，重新应用后仍可正常使用。
-        Migrator::down(&db, Some(1)).await?;
+        let steps = Migrator::migrations()
+            .iter()
+            .rev()
+            .take_while(|m| m.name() != "m20261012_000001_video_availability")
+            .count() as u32
+            + 1;
+        Migrator::down(&db, Some(steps)).await?;
         assert_eq!(video_stat::Entity::find().count(&db).await?, 1);
-        Migrator::up(&db, Some(1)).await?;
+        Migrator::up(&db, Some(steps)).await?;
         assert_eq!(video_availability::Entity::find().count(&db).await?, 0);
         assert_eq!(video_stat::Entity::find().count(&db).await?, 1);
         db.close().await?;

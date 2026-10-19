@@ -1035,7 +1035,7 @@ async fn save_replies(dynamic_id: &str, replies: &[ReplyInfo], connection: &impl
     for chunk in models.chunks(80) {
         reply::Entity::insert_many(chunk.to_vec())
             .on_conflict(
-                OnConflict::column(reply::Column::Rpid)
+                OnConflict::columns([reply::Column::Rpid, reply::Column::DynamicId])
                     .update_columns([
                         reply::Column::ParentRpid,
                         reply::Column::Uname,
@@ -1237,7 +1237,13 @@ mod tests {
         assert!(paused.rescan_reply);
         assert!(paused.reply_synced_at.is_none());
         assert!(paused.reply_sync_state.is_some());
-        assert!(reply::Entity::find_by_id(999).one(&db).await?.unwrap().valid);
+        assert!(
+            reply::Entity::find_by_id((999, "budget".to_string()))
+                .one(&db)
+                .await?
+                .unwrap()
+                .valid
+        );
         // 用数据库重新加载的断点继续，模拟下一轮 / 程序重启后的扫描。
         process_dynamic(&source, paused, &downloader, &api, &db, &config).await?;
         let finished = dynamic::Entity::find_by_id("budget").one(&db).await?.unwrap();
@@ -1250,7 +1256,13 @@ mod tests {
         let offsets: Vec<_> = last_query.iter().filter(|(key, _)| key == "pagination_str").collect();
         assert_eq!(offsets.len(), 1);
         assert_eq!(serde_json::from_str::<Value>(&offsets[0].1)?["offset"], "page-51");
-        assert!(!reply::Entity::find_by_id(999).one(&db).await?.unwrap().valid);
+        assert!(
+            !reply::Entity::find_by_id((999, "budget".to_string()))
+                .one(&db)
+                .await?
+                .unwrap()
+                .valid
+        );
         assert_eq!(
             reply::Entity::find()
                 .filter(reply::Column::Valid.eq(true))
@@ -1364,8 +1376,19 @@ mod tests {
             .unwrap_err();
         assert!(error.downcast_ref::<BiliError>().unwrap().is_risk_control_related());
         assert_eq!(queries.lock().unwrap().len(), 2);
-        assert!(reply::Entity::find_by_id(1).one(&db).await?.is_some());
-        assert!(reply::Entity::find_by_id(999).one(&db).await?.unwrap().valid);
+        assert!(
+            reply::Entity::find_by_id((1, model.id.clone()))
+                .one(&db)
+                .await?
+                .is_some()
+        );
+        assert!(
+            reply::Entity::find_by_id((999, model.id.clone()))
+                .one(&db)
+                .await?
+                .unwrap()
+                .valid
+        );
         let resumed = dynamic::Entity::find_by_id("interrupted").one(&db).await?.unwrap();
         assert!(resumed.reply_sync_state.is_some());
         assert!(matches!(
@@ -1422,6 +1445,29 @@ mod tests {
                 .unwrap()
                 .rescan_reply
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_reply_migration_backfills_associations_and_can_retry() -> Result<()> {
+        let db = test_database().await?;
+        Migrator::down(&db, Some(1)).await?;
+        insert_dynamic(&db, "migration-first").await?;
+        insert_dynamic(&db, "migration-second").await?;
+        db.execute_unprepared("INSERT INTO reply (rpid,dynamic_id,uname,avatar,content,ctime,valid) VALUES (42,'migration-first','name','','history','2026-01-01 00:00:00',0)").await?;
+        Migrator::up(&db, Some(1)).await?;
+        assert_eq!(reply::Entity::find().count(&db).await?, 2);
+        for row in reply::Entity::find().all(&db).await? {
+            assert!(!row.valid);
+            assert_eq!(row.content, "history");
+        }
+        db.execute_unprepared("DELETE FROM seaql_migrations WHERE version='m20261020_000001_scope_reply_to_dynamic'")
+            .await?;
+        Migrator::up(&db, None).await?;
+        assert_eq!(reply::Entity::find().count(&db).await?, 2);
+        // 拒绝有损降级，两个账号的关联与历史都必须保留。
+        assert!(Migrator::down(&db, Some(1)).await.is_err());
+        assert_eq!(reply::Entity::find().count(&db).await?, 2);
         Ok(())
     }
 
