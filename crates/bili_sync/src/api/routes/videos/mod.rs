@@ -187,39 +187,53 @@ pub async fn get_video(
     }))
 }
 
-/// 手动触发「检查已删除视频」：拉取指定投稿源（为空则全部）的当前视频列表，
-/// 将本地已有但已从 B 站消失的视频标记为失效，不影响本地文件。
-/// 提交后立即返回，任务排队等当前视频任务结束后在后台执行，结果见日志页
+/// 手动指定的源逐个检查，不受周期同步的启用开关限制；省略选择时只检查启用源。
+async fn scan_sources_for_selection(
+    db: &DatabaseConnection,
+    requested: Option<&[i32]>,
+) -> Result<Vec<submission::Model>, ApiError> {
+    let sources = match requested {
+        Some(ids) => {
+            let ids = ids.iter().copied().collect::<HashSet<_>>();
+            if ids.is_empty() {
+                return Err(InnerApiError::BadRequest("请至少选择一个投稿源".to_string()).into());
+            }
+            let sources = submission::Entity::find()
+                .filter(submission::Column::Id.is_in(ids.iter().copied()))
+                .order_by_asc(submission::Column::Id)
+                .all(db)
+                .await?;
+            if sources.len() != ids.len() {
+                return Err(InnerApiError::BadRequest("部分所选投稿源已不存在，请刷新后重新选择".to_string()).into());
+            }
+            sources
+        }
+        None => {
+            submission::Entity::find()
+                .filter(submission::Column::Enabled.eq(true))
+                .order_by_asc(submission::Column::Id)
+                .all(db)
+                .await?
+        }
+    };
+    if sources.is_empty() {
+        return Err(InnerApiError::BadRequest("没有可检查的投稿源".to_string()).into());
+    }
+    Ok(sources)
+}
+
+/// 手动检查视频删除与失效状态，不影响本地文件。
+/// 提交后立即返回，任务排队等当前视频任务结束后在后台执行，结果见日志页。
 pub async fn scan_deleted_videos(
     Extension(db): Extension<DatabaseConnection>,
     Extension(bili_client): Extension<Arc<BiliClient>>,
     Json(request): Json<ScanDeletedVideosRequest>,
 ) -> Result<ApiResponse<ScanDeletedVideosResponse>, ApiError> {
-    if request.submission_ids.as_ref().is_some_and(Vec::is_empty) {
-        return Err(InnerApiError::BadRequest("请至少选择一个投稿源".to_string()).into());
-    }
-    // 防连点：已有检测在跑（含排队等待中）时直接拒绝
+    let sources = scan_sources_for_selection(&db, request.submission_ids.as_deref()).await?;
+    // 防连点：已有检测在跑（含排队等待中）时直接拒绝。
     let dedup_guard = SCAN_DEAD_LOCK
         .try_lock()
         .map_err(|_| InnerApiError::BadRequest("已有删除检测任务在进行中，请等待完成后再试".to_string()))?;
-    let sources = match &request.submission_ids {
-        Some(ids) => {
-            submission::Entity::find()
-                .filter(submission::Column::Id.is_in(ids.clone()))
-                .filter(submission::Column::Enabled.eq(true))
-                .all(&db)
-                .await?
-        }
-        None => {
-            submission::Entity::find()
-                .filter(submission::Column::Enabled.eq(true))
-                .all(&db)
-                .await?
-        }
-    };
-    if sources.is_empty() {
-        return Err(InnerApiError::BadRequest("所选投稿源不存在或未启用".to_string()).into());
-    }
     let planned = sources.len();
     let connection = db.clone();
     *SCAN_TASK_PROGRESS.write() = ScanTaskProgress {
@@ -234,7 +248,9 @@ pub async fn scan_deleted_videos(
         {
             let config = VersionedConfig::get().read();
             if let Err(e) = ensure_mixin_key(&bili_client, &config.credential).await {
-                warn!("删除检测初始化 wbi 签名密钥失败：{:#}", e);
+                warn!("删除检测初始化 wbi 签名密钥失败，本轮停止：{:#}", e);
+                *SCAN_TASK_PROGRESS.write() = ScanTaskProgress::default();
+                return;
             }
         }
         let _task_guard = DownloadTaskManager::get().wait_and_acquire().await;
@@ -268,7 +284,17 @@ pub async fn scan_deleted_videos(
                     restored += r;
                 }
                 Err(e) => {
-                    warn!("检查「{}」已删除视频失败：{:#}", video_source.display_name(), e);
+                    if e.downcast_ref::<crate::bilibili::BiliError>()
+                        .is_some_and(|error| error.is_risk_control_related())
+                    {
+                        warn!(
+                            "检查「{}」视频状态触发风控，本轮停止：{:#}",
+                            video_source.display_name(),
+                            e
+                        );
+                        break;
+                    }
+                    warn!("检查「{}」视频状态失败：{:#}", video_source.display_name(), e);
                 }
             }
         }
@@ -605,7 +631,49 @@ pub async fn update_filtered_video_status(
 mod tests {
     use super::*;
     use axum::response::IntoResponse;
+    use bili_sync_migration::{Migrator, MigratorTrait};
     use sea_orm::Database;
+
+    #[tokio::test]
+    async fn manual_scan_honors_exact_selection_without_enabling_paused_sources() -> Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+        for (id, enabled) in [(1, true), (2, false)] {
+            submission::ActiveModel {
+                id: Set(id),
+                upper_id: Set(i64::from(id)),
+                upper_name: Set(format!("source-{id}")),
+                path: Set(format!("/test/source-{id}")),
+                created_at: Set(String::new()),
+                latest_row_at: Set(chrono::Utc::now().naive_utc()),
+                use_dynamic_api: Set(false),
+                enabled: Set(enabled),
+                rule: Set(None),
+                filter_option: Set(None),
+            }
+            .insert(&db)
+            .await?;
+        }
+        let paused = scan_sources_for_selection(&db, Some(&[2]))
+            .await
+            .unwrap_or_else(|_| panic!("explicitly selected paused sources must be checked"));
+        assert_eq!(paused.iter().map(|s| s.id).collect::<Vec<_>>(), vec![2]);
+        assert!(!submission::Entity::find_by_id(2).one(&db).await?.unwrap().enabled);
+        let default = scan_sources_for_selection(&db, None)
+            .await
+            .unwrap_or_else(|_| panic!("default selection should include enabled sources"));
+        assert_eq!(default.iter().map(|s| s.id).collect::<Vec<_>>(), vec![1]);
+        let selected = scan_sources_for_selection(&db, Some(&[2, 1, 2]))
+            .await
+            .unwrap_or_else(|_| panic!("duplicate source IDs should be deduplicated"));
+        assert_eq!(selected.iter().map(|s| s.id).collect::<Vec<_>>(), vec![1, 2]);
+        let error = scan_sources_for_selection(&db, Some(&[1, 999]))
+            .await
+            .err()
+            .expect("stale selections must not silently run a partial scan");
+        assert_eq!(error.into_response().status(), axum::http::StatusCode::BAD_REQUEST);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn empty_scan_selection_is_rejected_before_reading_sources_or_scheduling() -> Result<()> {

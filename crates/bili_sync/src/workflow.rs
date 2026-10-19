@@ -183,12 +183,10 @@ pub async fn refresh_video_source<'a>(
     Ok(())
 }
 
-/// 拉取视频源当前全部投稿列表，双向评估本地视频与 B 站的差异：
-/// - 未标记（valid = true）且已确认从 B 站消失的视频 → 标记为失效并记录删除时间
-/// - 已标记失效但视频仍存在（如动态来源或被误标）→ 恢复为有效
-///
-/// 不影响已下载的本地文件；不在投稿列表中的视频会通过详情接口二次确认（确认已删除才标记）；
-/// 拉取列表失败时跳过检测，避免因接口异常误标。返回 (新标记删除数, 恢复有效数)。
+/// 比对当前投稿列表，并通过详情接口确认缺失或已失效视频的状态。
+/// 明确删除时记录首次确认时间，不可见时只标记失效；恢复可见后仍检查下载权限。
+/// 保留所有本地文件和历史记录，列表缺失或请求失败不会直接判定删除，风控立即向上抛出。
+/// 返回 (新确认删除数, 恢复有效数)。
 pub async fn detect_deleted_videos(
     video_source: &VideoSourceEnum,
     bili_client: &BiliClient,
@@ -220,6 +218,9 @@ pub async fn detect_deleted_videos(
         // 不在投稿列表里：可能是动态来源的视频或被删除的视频，请求详情接口确认
         let video = Video::new(bili_client, video_model.bvid.as_str(), credential);
         match video.get_view_info().await {
+            Err(e) if matches!(e.downcast_ref::<BiliError>(), Some(inner) if inner.is_risk_control_related()) => {
+                return Err(e);
+            }
             Err(e) if matches!(e.downcast_ref::<BiliError>(), Some(inner) if inner.is_video_unavailable()) => {
                 let error = e.downcast_ref::<BiliError>().unwrap();
                 crate::video_stats::record_video_unavailable(&video_model.bvid, error, connection).await?;
