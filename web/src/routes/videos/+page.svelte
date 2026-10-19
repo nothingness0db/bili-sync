@@ -44,7 +44,7 @@
 	import StatusFilter from '$lib/components/status-filter.svelte';
 	import ValidationFilter from '$lib/components/validation-filter.svelte';
 	import CreatedTimeFilter from '$lib/components/created-time-filter.svelte';
-	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap } from 'svelte/reactivity';
 
 	const pageSize = 20;
 
@@ -66,24 +66,36 @@
 
 	let scanDeletedDialogOpen = false;
 	let scanningDeleted = false;
-	let selectedSubmissionIds: SvelteSet<number> = new SvelteSet();
+	let selectedSubmissionIds: number[] = [];
+	$: submissionSources = videoSources?.submission ?? [];
+	$: allSubmissionsSelected =
+		submissionSources.length > 0 &&
+		submissionSources.every((source) => selectedSubmissionIds.includes(source.id));
+	$: someSubmissionsSelected = selectedSubmissionIds.length > 0 && !allSubmissionsSelected;
+
+	function selectAllSubmissions(checked: boolean) {
+		selectedSubmissionIds = checked ? submissionSources.map((source) => source.id) : [];
+	}
+
+	function selectSubmission(id: number, checked: boolean) {
+		selectedSubmissionIds = checked
+			? [...selectedSubmissionIds.filter((selectedId) => selectedId !== id), id]
+			: selectedSubmissionIds.filter((selectedId) => selectedId !== id);
+	}
 
 	function handleScanDeleted() {
-		selectedSubmissionIds.clear();
-		for (const s of videoSources?.submission ?? []) {
-			selectedSubmissionIds.add(s.id);
-		}
+		selectAllSubmissions(true);
 		scanDeletedDialogOpen = true;
 	}
 
 	async function confirmScanDeleted() {
+		const ids = [...selectedSubmissionIds];
+		if (ids.length === 0) {
+			toast.warning('请至少选择一个投稿源');
+			return;
+		}
 		scanningDeleted = true;
 		try {
-			const ids = [...selectedSubmissionIds];
-			if (ids.length === 0) {
-				toast.warning('请至少选择一个投稿源');
-				return;
-			}
 			const result = await api.scanDeletedVideos(ids);
 			toast.success('已加入队列', {
 				description: `将扫描 ${result.data.scanned_sources} 个投稿源，任务会在当前任务结束后自动执行，结果见日志页`
@@ -717,17 +729,10 @@
 			<div class="flex items-center space-x-2">
 				<Checkbox
 					id="select-all-submissions"
-					checked={selectedSubmissionIds.size === (videoSources?.submission.length ?? 0) &&
-						selectedSubmissionIds.size > 0}
-					onCheckedChange={(checked) => {
-						if (checked) {
-							for (const s of videoSources?.submission ?? []) {
-								selectedSubmissionIds.add(s.id);
-							}
-						} else {
-							selectedSubmissionIds.clear();
-						}
-					}}
+					checked={allSubmissionsSelected}
+					indeterminate={someSubmissionsSelected}
+					disabled={scanningDeleted || submissionSources.length === 0}
+					onCheckedChange={selectAllSubmissions}
 				/>
 				<Label for="select-all-submissions" class="text-sm font-medium">全选</Label>
 			</div>
@@ -736,14 +741,9 @@
 					<div class="flex items-center space-x-2">
 						<Checkbox
 							id={`submission-${source.id}`}
-							checked={selectedSubmissionIds.has(source.id)}
-							onCheckedChange={(checked) => {
-								if (checked) {
-									selectedSubmissionIds.add(source.id);
-								} else {
-									selectedSubmissionIds.delete(source.id);
-								}
-							}}
+							checked={selectedSubmissionIds.includes(source.id)}
+							disabled={scanningDeleted}
+							onCheckedChange={(checked) => selectSubmission(source.id, checked)}
 						/>
 						<Label for={`submission-${source.id}`} class="text-sm">{source.name}</Label>
 					</div>
@@ -761,7 +761,10 @@
 					scanDeletedDialogOpen = false;
 				}}>取消</AlertDialog.Cancel
 			>
-			<AlertDialog.Action onclick={confirmScanDeleted} disabled={scanningDeleted}>
+			<AlertDialog.Action
+				onclick={confirmScanDeleted}
+				disabled={scanningDeleted || selectedSubmissionIds.length === 0}
+			>
 				{#if scanningDeleted}
 					<SearchCheckIcon class="mr-2 h-4 w-4 animate-pulse" />
 					检查中...

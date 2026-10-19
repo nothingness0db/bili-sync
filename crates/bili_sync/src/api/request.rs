@@ -36,7 +36,7 @@ pub struct VideosRequest {
     pub page_size: Option<u64>,
 }
 
-/// 手动触发「检查已删除视频」的请求，submission_ids 为空时检查全部投稿源
+/// 手动触发视频状态检查；省略 submission_ids 时检查全部投稿源，空数组拒绝执行。
 #[derive(Deserialize)]
 pub struct ScanDeletedVideosRequest {
     pub submission_ids: Option<Vec<i32>>,

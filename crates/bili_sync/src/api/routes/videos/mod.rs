@@ -182,25 +182,31 @@ pub async fn scan_deleted_videos(
     Extension(bili_client): Extension<Arc<BiliClient>>,
     Json(request): Json<ScanDeletedVideosRequest>,
 ) -> Result<ApiResponse<ScanDeletedVideosResponse>, ApiError> {
+    if request.submission_ids.as_ref().is_some_and(Vec::is_empty) {
+        return Err(InnerApiError::BadRequest("请至少选择一个投稿源".to_string()).into());
+    }
     // 防连点：已有检测在跑（含排队等待中）时直接拒绝
     let dedup_guard = SCAN_DEAD_LOCK
         .try_lock()
         .map_err(|_| InnerApiError::BadRequest("已有删除检测任务在进行中，请等待完成后再试".to_string()))?;
     let sources = match &request.submission_ids {
-        Some(ids) if !ids.is_empty() => {
+        Some(ids) => {
             submission::Entity::find()
                 .filter(submission::Column::Id.is_in(ids.clone()))
                 .filter(submission::Column::Enabled.eq(true))
                 .all(&db)
                 .await?
         }
-        _ => {
+        None => {
             submission::Entity::find()
                 .filter(submission::Column::Enabled.eq(true))
                 .all(&db)
                 .await?
         }
     };
+    if sources.is_empty() {
+        return Err(InnerApiError::BadRequest("所选投稿源不存在或未启用".to_string()).into());
+    }
     let planned = sources.len();
     let connection = db.clone();
     *SCAN_TASK_PROGRESS.write() = ScanTaskProgress {
@@ -580,4 +586,31 @@ pub async fn update_filtered_video_status(
         updated_videos_count: all_videos.len(),
         updated_pages_count: all_pages.len(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::response::IntoResponse;
+    use sea_orm::Database;
+
+    #[tokio::test]
+    async fn empty_scan_selection_is_rejected_before_reading_sources_or_scheduling() -> Result<()> {
+        // 无表的数据库：清空选择必须直接拒绝，不能落入“检查全部”的路径。
+        let db = Database::connect("sqlite::memory:").await?;
+        let result = scan_deleted_videos(
+            Extension(db),
+            Extension(Arc::new(BiliClient::new())),
+            Json(ScanDeletedVideosRequest {
+                submission_ids: Some(vec![]),
+            }),
+        )
+        .await;
+        let response = match result {
+            Err(error) => error.into_response(),
+            Ok(_) => panic!("empty selection must not schedule a scan"),
+        };
+        assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        Ok(())
+    }
 }
