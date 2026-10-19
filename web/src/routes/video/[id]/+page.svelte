@@ -280,7 +280,8 @@
 								upper_name: '',
 								download_status: pageInfo.download_status,
 								should_download: videoData.video.should_download,
-								valid: videoData.video.valid
+								valid: videoData.video.valid,
+								deleted_at: videoData.video.deleted_at
 							}}
 							mode="page"
 							showActions={false}
