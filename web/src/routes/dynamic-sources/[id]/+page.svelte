@@ -445,7 +445,10 @@
 			<div class="mb-3 flex items-center justify-between">
 				<div class="flex items-center gap-2">
 					<MessagesSquareIcon class="h-4 w-4" />
-					<span class="text-sm font-medium">动态列表（评论自动同步发布后 5 天）</span>
+					<span class="text-sm font-medium">动态列表（评论自动同步至发布后 30 天）</span>
+					<span class="text-muted-foreground text-xs"
+						>1 天内每小时，2–7 天每 6 小时，8–30 天每 24 小时</span
+					>
 				</div>
 				<Button
 					size="sm"
@@ -583,9 +586,7 @@
 			<AlertDialog.Header>
 				<AlertDialog.Title>确认立即同步？</AlertDialog.Title>
 				<AlertDialog.Description>
-					这是手动触发操作，会立即执行该动态源的账号数据、动态和评论同步。若当前定时任务也在运行，两个任务可能并发请求
-					B 站接口；请求过于频繁可能触发 B
-					站风控或暂时封控。确认后仍会继续执行，进度可在任务看板和日志中查看。
+					将同步该动态源的账号数据、动态和评论。若该源正在同步，本次操作会排队等待。进度可在任务看板和日志中查看。
 				</AlertDialog.Description>
 			</AlertDialog.Header>
 			<AlertDialog.Footer>

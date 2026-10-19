@@ -28,6 +28,7 @@ use crate::api::response::{
 use crate::api::wrapper::{ApiError, ApiResponse, ValidatedJson};
 use crate::bilibili::{BiliClient, Collection, CollectionItem, FavoriteList, Submission};
 use crate::config::{PathSafeTemplate, TEMPLATE, VersionedConfig};
+use crate::task::DownloadTaskManager;
 use crate::utils::rule::FieldEvaluatable;
 
 pub(super) fn router() -> Router {
@@ -384,6 +385,8 @@ pub async fn full_sync_video_source(
     Extension(bili_client): Extension<Arc<BiliClient>>,
     Json(request): Json<FullSyncVideoSourceRequest>,
 ) -> Result<ApiResponse<FullSyncVideoSourceResponse>, ApiError> {
+    // 投稿列表、差集和文件删除都在运行锁内，防止旧下载任务重新插回已移除的视频。
+    let _guard = DownloadTaskManager::get().wait_and_acquire().await;
     let video_source: Option<VideoSourceEnum> = match source_type.as_str() {
         "collections" => collection::Entity::find_by_id(id).one(&db).await?.map(Into::into),
         "favorites" => favorite::Entity::find_by_id(id).one(&db).await?.map(Into::into),

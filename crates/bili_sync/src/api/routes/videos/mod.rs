@@ -124,6 +124,7 @@ pub async fn get_videos(
     Extension(db): Extension<DatabaseConnection>,
     Query(params): Query<VideosRequest>,
 ) -> Result<ApiResponse<VideosResponse>, ApiError> {
+    let (page, page_size) = video_pagination(params.page, params.page_size)?;
     let mut query = video::Entity::find();
     for (field, column) in [
         (params.collection, video::Column::CollectionId),
@@ -150,11 +151,6 @@ pub async fn get_videos(
     }
     query = apply_created_at_filter(query, params.created_from, params.created_to);
     let total_count = query.clone().count(&db).await?;
-    let (page, page_size) = if let (Some(page), Some(page_size)) = (params.page, params.page_size) {
-        (page, page_size)
-    } else {
-        (0, 10)
-    };
     Ok(ApiResponse::ok(VideosResponse {
         videos: query
             .order_by_desc(video::Column::Id)
@@ -164,6 +160,21 @@ pub async fn get_videos(
             .await?,
         total_count,
     }))
+}
+
+fn video_pagination(page: Option<u64>, page_size: Option<u64>) -> Result<(u64, u64), ApiError> {
+    let page = page.unwrap_or(0);
+    let page_size = page_size.unwrap_or(10);
+    if !(1..=100).contains(&page_size) {
+        return Err(InnerApiError::BadRequest("page_size must be between 1 and 100".to_string()).into());
+    }
+    if page
+        .checked_mul(page_size)
+        .is_none_or(|offset| offset > i64::MAX as u64)
+    {
+        return Err(InnerApiError::BadRequest("page offset is too large".to_string()).into());
+    }
+    Ok((page, page_size))
 }
 
 pub async fn get_video(
@@ -317,7 +328,7 @@ pub async fn reset_video_status(
     Extension(db): Extension<DatabaseConnection>,
     Json(request): Json<ResetVideoStatusRequest>,
 ) -> Result<ApiResponse<ResetVideoResponse>, ApiError> {
-    let (video_info, pages_info) = tokio::try_join!(
+    let (video_info, mut pages_info) = tokio::try_join!(
         video::Entity::find_by_id(id).into_partial_model::<VideoInfo>().one(&db),
         page::Entity::find()
             .filter(page::Column::VideoId.eq(id))
@@ -328,9 +339,9 @@ pub async fn reset_video_status(
     let Some(mut video_info) = video_info else {
         return Err(InnerApiError::NotFound(id).into());
     };
-    let resetted_pages_info = pages_info
-        .into_iter()
-        .filter_map(|mut page_info| {
+    let resetted_pages_info: Vec<&mut PageInfo> = pages_info
+        .iter_mut()
+        .filter_map(|page_info| {
             let mut page_status = PageStatus::from(page_info.download_status);
             if (request.force && page_status.force_reset_failed()) || page_status.reset_failed() {
                 page_info.download_status = page_status.into();
@@ -360,14 +371,14 @@ pub async fn reset_video_status(
             update_video_download_status::<VideoInfo>(&txn, &resetted_videos_info, None).await?;
         }
         if !resetted_pages_info.is_empty() {
-            update_page_download_status(&txn, &resetted_pages_info, Some(500)).await?;
+            update_page_download_status::<PageInfo>(&txn, &resetted_pages_info, Some(500)).await?;
         }
         txn.commit().await?;
     }
     Ok(ApiResponse::ok(ResetVideoResponse {
         resetted,
         video: video_info,
-        pages: resetted_pages_info,
+        pages: pages_info,
     }))
 }
 
@@ -375,7 +386,17 @@ pub async fn clear_and_reset_video_status(
     Path(id): Path<i32>,
     Extension(db): Extension<DatabaseConnection>,
 ) -> Result<ApiResponse<ClearAndResetVideoStatusResponse>, ApiError> {
-    let video_info = video::Entity::find_by_id(id).one(&db).await?;
+    let guard = DownloadTaskManager::get().wait_and_acquire().await;
+    clear_and_reset_video_status_locked(id, &db, guard).await
+}
+
+async fn clear_and_reset_video_status_locked(
+    id: i32,
+    db: &DatabaseConnection,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+) -> Result<ApiResponse<ClearAndResetVideoStatusResponse>, ApiError> {
+    // 锁内重新读取，避免正在下载的旧 model 在清除后写回分页与完成状态。
+    let video_info = video::Entity::find_by_id(id).one(db).await?;
     let Some(video_info) = video_info else {
         return Err(InnerApiError::NotFound(id).into());
     };
@@ -633,6 +654,156 @@ mod tests {
     use axum::response::IntoResponse;
     use bili_sync_migration::{Migrator, MigratorTrait};
     use sea_orm::Database;
+
+    async fn reset_fixture(video_status: u32, page_statuses: &[u32]) -> Result<DatabaseConnection> {
+        let db = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+        let mut model = video::Model {
+            bvid: "BVreset".into(),
+            download_status: video_status,
+            single_page: Some(false),
+            ..Default::default()
+        }
+        .into_active_model();
+        model.id = Set(1);
+        model.insert(&db).await?;
+        for (index, status) in page_statuses.iter().enumerate() {
+            let mut model = page::Model {
+                video_id: 1,
+                cid: index as i64 + 1,
+                pid: index as i32 + 1,
+                download_status: *status,
+                ..Default::default()
+            }
+            .into_active_model();
+            model.id = Set(index as i32 + 1);
+            model.insert(&db).await?;
+        }
+        Ok(db)
+    }
+
+    #[tokio::test]
+    async fn reset_returns_every_page_including_unchanged_completed_pages() -> Result<()> {
+        let mut complete = PageStatus::default();
+        for task in 0..5 {
+            complete.set(task, 7);
+        }
+        let complete: u32 = complete.into();
+        // 第一组只有一页失败；第二组只有父任务失败。两种情况都要保留完整分页。
+        for (video_status, page_statuses, expected) in [
+            (0, vec![complete, 1, complete], vec![complete, 0, complete]),
+            (1, vec![complete, complete], vec![complete, complete]),
+        ] {
+            let db = reset_fixture(video_status, &page_statuses).await?;
+            let response = reset_video_status(
+                Path(1),
+                Extension(db.clone()),
+                Json(ResetVideoStatusRequest { force: false }),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("reset should succeed"))
+            .into_response();
+            assert_eq!(response.status(), axum::http::StatusCode::OK);
+            let json: serde_json::Value =
+                serde_json::from_slice(&axum::body::to_bytes(response.into_body(), 8192).await?)?;
+            assert_eq!(json["data"]["resetted"], true);
+            assert_eq!(json["data"]["pages"].as_array().unwrap().len(), expected.len());
+            for (index, status) in expected.iter().enumerate() {
+                assert_eq!(json["data"]["pages"][index]["id"], index + 1);
+                // API 序列化把状态转换成分段数组；数据库保留原始 bitfield。
+                let segments: [u32; 5] = PageStatus::from(*status).into();
+                assert_eq!(
+                    json["data"]["pages"][index]["download_status"],
+                    serde_json::to_value(segments)?
+                );
+                assert_eq!(
+                    page::Entity::find_by_id(index as i32 + 1)
+                        .one(&db)
+                        .await?
+                        .unwrap()
+                        .download_status,
+                    *status
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clear_reset_waits_for_downloader_then_reads_and_clears_its_final_models() -> Result<()> {
+        let db = reset_fixture(0, &[0]).await?;
+        let dir = async_tempfile::TempDir::new().await?;
+        let old_path = dir.dir_path().join("old");
+        let final_path = dir.dir_path().join("downloaded");
+        tokio::fs::create_dir_all(&old_path).await?;
+        tokio::fs::create_dir_all(&final_path).await?;
+        let file = final_path.join("video.mp4");
+        tokio::fs::write(&file, b"finished download").await?;
+        let running = Arc::new(tokio::sync::Mutex::new(()));
+        let download_guard = running.clone().lock_owned().await;
+        let mut model = video::Entity::find_by_id(1)
+            .one(&db)
+            .await?
+            .unwrap()
+            .into_active_model();
+        model.path = Set(old_path.to_string_lossy().into_owned());
+        model.update(&db).await?;
+        let task_db = db.clone();
+        let (queued_tx, queued_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            queued_tx.send(()).unwrap();
+            let guard = running.lock_owned().await;
+            clear_and_reset_video_status_locked(1, &task_db, guard).await
+        });
+        queued_rx.await?;
+        assert!(!task.is_finished());
+        assert_eq!(page::Entity::find().count(&db).await?, 1);
+        assert!(file.exists());
+        // 模拟下载器持锁期间最后写回的路径、分页与完成状态。
+        let mut model = video::Entity::find_by_id(1)
+            .one(&db)
+            .await?
+            .unwrap()
+            .into_active_model();
+        model.path = Set(final_path.to_string_lossy().into_owned());
+        model.download_status = Set((1 << 31) | 0x7fff);
+        model.update(&db).await?;
+        let mut model = page::Entity::find_by_id(1).one(&db).await?.unwrap().into_active_model();
+        model.path = Set(Some(file.to_string_lossy().into_owned()));
+        model.download_status = Set((1 << 31) | 0x7fff);
+        crate::utils::model::update_pages_model(vec![model], &db).await?;
+        drop(download_guard);
+        let response = task.await?.unwrap_or_else(|_| panic!("clear reset should succeed"));
+        assert_eq!(response.into_response().status(), axum::http::StatusCode::OK);
+        assert_eq!(page::Entity::find().count(&db).await?, 0);
+        let model = video::Entity::find_by_id(1).one(&db).await?.unwrap();
+        assert_eq!(model.download_status, 0);
+        assert_eq!(model.single_page, None);
+        assert!(!final_path.exists());
+        assert!(old_path.exists(), "must reread the final path after waiting");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_video_pagination_is_rejected_before_querying_database() -> Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        for query in [
+            "page=0&page_size=0",
+            "page_size=101",
+            "page=18446744073709551615&page_size=20",
+        ] {
+            let params: VideosRequest = serde_urlencoded::from_str(query)?;
+            let response = get_videos(Extension(db.clone()), Query(params))
+                .await
+                .err()
+                .expect("invalid pagination must return a client error")
+                .into_response();
+            assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
+        }
+        assert_eq!(video_pagination(Some(2), None).ok(), Some((2, 10)));
+        assert_eq!(video_pagination(None, Some(20)).ok(), Some((0, 20)));
+        Ok(())
+    }
 
     #[tokio::test]
     async fn manual_scan_honors_exact_selection_without_enabling_paused_sources() -> Result<()> {

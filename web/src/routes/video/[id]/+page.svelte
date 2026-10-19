@@ -27,11 +27,16 @@
 	let statusEditorOpen = false;
 	let statusEditorLoading = false;
 	let videoSequence = 0;
+	let mutationSequence = 0;
 	let playbackOpen = false;
 
 	async function loadVideoDetail() {
 		const sequence = ++videoSequence;
+		mutationSequence += 1;
 		videoData = null;
+		statusEditorLoading = false;
+		resetting = false;
+		clearAndResetting = false;
 		playbackOpen = false;
 		statusEditorOpen = false;
 		resetDialogOpen = false;
@@ -83,10 +88,18 @@
 
 	async function handleStatusEditorSubmit(request: UpdateVideoStatusRequest) {
 		if (!videoData) return;
+		const videoId = videoData.video.id;
+		const pageSequence = videoSequence;
+		const mutation = ++mutationSequence;
+		const isCurrent = () =>
+			pageSequence === videoSequence &&
+			mutation === mutationSequence &&
+			videoData?.video.id === videoId;
 
 		statusEditorLoading = true;
 		try {
-			const result = await api.updateVideoStatus(videoData.video.id, request);
+			const result = await api.updateVideoStatus(videoId, request);
+			if (!isCurrent()) return;
 			const data = result.data;
 
 			if (data.success) {
@@ -101,19 +114,29 @@
 				toast.error('状态更新失败');
 			}
 		} catch (error) {
+			if (!isCurrent()) return;
 			console.error('状态更新失败：', error);
 			toast.error('状态更新失败', {
 				description: (error as ApiError).message
 			});
 		} finally {
-			statusEditorLoading = false;
+			if (isCurrent()) statusEditorLoading = false;
 		}
 	}
 
 	async function handleReset(forceReset: boolean) {
 		if (!videoData) return;
+		const videoId = videoData.video.id;
+		const pageSequence = videoSequence;
+		const mutation = ++mutationSequence;
+		statusEditorLoading = false;
+		const isCurrent = () =>
+			pageSequence === videoSequence &&
+			mutation === mutationSequence &&
+			videoData?.video.id === videoId;
 		try {
-			const result = await api.resetVideoStatus(videoData.video.id, { force: forceReset });
+			const result = await api.resetVideoStatus(videoId, { force: forceReset });
+			if (!isCurrent()) return;
 			const data = result.data;
 			if (data.resetted) {
 				videoData = {
@@ -127,6 +150,7 @@
 				});
 			}
 		} catch (error) {
+			if (!isCurrent()) return;
 			console.error('重置失败:', error);
 			toast.error('重置失败', {
 				description: (error as ApiError).message
@@ -136,8 +160,17 @@
 
 	async function handleClearAndReset() {
 		if (!videoData) return;
+		const videoId = videoData.video.id;
+		const pageSequence = videoSequence;
+		const mutation = ++mutationSequence;
+		statusEditorLoading = false;
+		const isCurrent = () =>
+			pageSequence === videoSequence &&
+			mutation === mutationSequence &&
+			videoData?.video.id === videoId;
 		try {
-			const result = await api.clearAndResetVideoStatus(videoData.video.id);
+			const result = await api.clearAndResetVideoStatus(videoId);
+			if (!isCurrent()) return;
 			const data = result.data;
 			videoData = {
 				video: data.video,
@@ -153,6 +186,7 @@
 				});
 			}
 		} catch (error) {
+			if (!isCurrent()) return;
 			console.error('清空重置失败：', error);
 			toast.error('清空重置失败', {
 				description: (error as ApiError).message

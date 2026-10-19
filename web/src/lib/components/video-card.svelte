@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { Badge } from '$lib/components/ui/badge/index.js';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -37,6 +38,10 @@
 	export let clearAndResetting = false;
 
 	let forceReset = false;
+	let destroyed = false;
+	onDestroy(() => {
+		destroyed = true;
+	});
 
 	function getStatusText(status: number): string {
 		if (status === 7) {
@@ -115,22 +120,30 @@
 	$: total = video.download_status.length;
 
 	async function handleReset() {
+		const videoId = video.id;
 		resetting = true;
-		if (onReset) {
-			await onReset(forceReset);
+		try {
+			if (onReset) await onReset(forceReset);
+		} finally {
+			if (!destroyed && video.id === videoId) {
+				resetting = false;
+				resetDialogOpen = false;
+				forceReset = false;
+			}
 		}
-		resetting = false;
-		resetDialogOpen = false;
-		forceReset = false;
 	}
 
 	async function handleClearAndReset() {
+		const videoId = video.id;
 		clearAndResetting = true;
-		if (onClearAndReset) {
-			await onClearAndReset();
+		try {
+			if (onClearAndReset) await onClearAndReset();
+		} finally {
+			if (!destroyed && video.id === videoId) {
+				clearAndResetting = false;
+				clearAndResetDialogOpen = false;
+			}
 		}
-		clearAndResetting = false;
-		clearAndResetDialogOpen = false;
 	}
 
 	function handleViewDetail() {
