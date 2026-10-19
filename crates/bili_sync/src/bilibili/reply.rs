@@ -11,7 +11,7 @@ use crate::bilibili::{BiliClient, Credential, ErrorForStatusExt, MIXIN_KEY, Vali
 
 /// 评论接口请求间隔，风控敏感接口，保守节流
 const REPLY_REQUEST_INTERVAL: Duration = Duration::from_millis(400);
-const REPLY_PAGINATION_VERSION: u8 = 2;
+const REPLY_PAGINATION_VERSION: u8 = 4;
 
 /// 一条评论（含楼中楼回复）
 #[derive(Debug, Clone, serde::Serialize)]
@@ -74,6 +74,7 @@ impl<'a> Reply<'a> {
         if self.test_endpoint.is_none() {
             sleep(REPLY_REQUEST_INTERVAL).await;
         }
+        let legacy_main = state.main_finished && state.needs_legacy_verification() && !state.legacy_finished;
         let (url, query) = if let Some(sub) = state.pending_sub.front() {
             (
                 "https://api.bilibili.com/x/v2/reply/reply",
@@ -83,6 +84,17 @@ impl<'a> Reply<'a> {
                     ("root", sub.root.to_string()),
                     ("ps", "20".to_string()),
                     ("pn", sub.next_page.to_string()),
+                ],
+            )
+        } else if legacy_main {
+            (
+                "https://api.bilibili.com/x/v2/reply",
+                vec![
+                    ("type", comment_type.to_string()),
+                    ("oid", oid.to_string()),
+                    ("sort", "2".into()),
+                    ("ps", "20".into()),
+                    ("pn", state.legacy_next_page.unwrap_or(1).to_string()),
                 ],
             )
         } else {
@@ -107,10 +119,23 @@ impl<'a> Reply<'a> {
             .validate()?;
         let data = res["data"].take();
         let mut next_state = state.clone();
-        let replies = if state.pending_sub.is_empty() {
-            next_state.apply_main_page(&data)?
-        } else {
+        let replies = if !state.pending_sub.is_empty() {
             next_state.apply_sub_page(&data)?
+        } else if legacy_main {
+            next_state.apply_legacy_main_page(&data)?
+        } else {
+            match next_state.apply_main_page(&data) {
+                Ok(replies) => replies,
+                Err(error) if error.to_string().starts_with("reply pagination stalled:") => {
+                    // 游标不再推进时转完整列表；保留已提交页面，不把半次扫描算作完成。
+                    warn!("主评论分页不再推进，转完整列表补漏：{error}");
+                    next_state = state.clone();
+                    next_state.main_finished = true;
+                    next_state.force_legacy = true;
+                    Vec::new()
+                }
+                Err(error) => return Err(error),
+            }
         };
         Ok((replies, next_state))
     }
@@ -191,6 +216,14 @@ pub struct ReplySyncState {
     #[serde(default)]
     next_cursor: Option<u64>,
     main_finished: bool,
+    #[serde(default)]
+    expected_count: Option<u64>,
+    #[serde(default)]
+    legacy_next_page: Option<u64>,
+    #[serde(default)]
+    legacy_finished: bool,
+    #[serde(default)]
+    force_legacy: bool,
     pending_sub: VecDeque<SubReplyCursor>,
     seen_roots: HashSet<i64>,
     seen_ids: HashSet<i64>,
@@ -204,6 +237,10 @@ impl Default for ReplySyncState {
             next_offset: None,
             next_cursor: None,
             main_finished: false,
+            expected_count: None,
+            legacy_next_page: None,
+            legacy_finished: false,
+            force_legacy: false,
             pending_sub: VecDeque::new(),
             seen_roots: HashSet::new(),
             seen_ids: HashSet::new(),
@@ -219,10 +256,11 @@ struct SubReplyCursor {
 }
 
 impl ReplySyncState {
-    /// 旧版混用分页参数，已保存的主评论游标可能无法推进。
-    /// 只重新开始尚未结束的主评论扫描；已完成的主评论及楼中楼断点继续保留。
+    /// 旧周期可能混用分页参数或遗漏独立返回的评论。
+    /// 重启旧扫描周期并保留数据库历史；当前版本的主评论和楼中楼断点继续使用。
     pub fn restart_legacy_pagination(&mut self) -> bool {
-        if self.pagination_version < REPLY_PAGINATION_VERSION && !self.main_finished && self.next_offset.is_some() {
+        // 旧周期没有覆盖独立返回的置顶评论；重启扫描，数据库中的历史评论仍保留。
+        if self.pagination_version < REPLY_PAGINATION_VERSION {
             *self = Self::default();
             return true;
         }
@@ -230,8 +268,15 @@ impl ReplySyncState {
         false
     }
 
+    fn needs_legacy_verification(&self) -> bool {
+        self.force_legacy
+            || self
+                .expected_count
+                .is_some_and(|count| count > self.seen_ids.len() as u64)
+    }
+
     pub fn is_complete(&self) -> bool {
-        self.main_finished && self.pending_sub.is_empty()
+        self.main_finished && self.pending_sub.is_empty() && (!self.needs_legacy_verification() || self.legacy_finished)
     }
 
     pub fn seen_ids(&self) -> Vec<i64> {
@@ -268,25 +313,10 @@ impl ReplySyncState {
             reached_end || has_offset || next_cursor.is_some(),
             "reply cursor has not ended but next_offset is missing"
         );
-        let mut replies = Vec::new();
-        if let Some(items) = data["replies"].as_array() {
-            for item in items {
-                let info = Reply::parse_reply(item)?;
-                if self.seen_roots.insert(info.rpid) {
-                    // rcount 明确为 0 时无需再为这一条评论额外发起楼中楼请求。
-                    if item["rcount"].as_u64() != Some(0) {
-                        self.pending_sub.push_back(SubReplyCursor {
-                            root: info.rpid,
-                            next_page: 1,
-                        });
-                    }
-                    self.seen_ids.insert(info.rpid);
-                    replies.push(info);
-                }
-            }
-        } else {
-            ensure!(data["replies"].is_null(), "invalid reply list");
+        if let Some(count) = cursor.get("all_count").and_then(Value::as_u64) {
+            self.expected_count = Some(self.expected_count.unwrap_or(0).max(count));
         }
+        let replies = self.collect_main_replies(data)?;
         ensure!(
             reached_end || !replies.is_empty(),
             "reply pagination stalled: page contains no new comments"
@@ -313,6 +343,78 @@ impl ReplySyncState {
         }
         self.main_finished = reached_end;
         Ok(replies)
+    }
+
+    fn collect_main_replies(&mut self, data: &Value) -> Result<Vec<ReplyInfo>> {
+        let mut items = Vec::new();
+        for (field, label) in [("replies", "reply list"), ("top_replies", "pinned reply list")] {
+            match &data[field] {
+                Value::Array(values) => items.extend(values.iter()),
+                Value::Null => {}
+                _ => anyhow::bail!("invalid {label}"),
+            }
+        }
+        // 兼容旧接口把 UP 主/管理员置顶放在 top 对象中的形状；与主列表按 rpid 去重。
+        if let Some(top) = data["top"].as_object() {
+            items.extend(top.values().filter(|item| item.get("rpid").is_some()));
+        }
+        let mut replies = Vec::new();
+        for item in items {
+            let info = Reply::parse_reply(item)?;
+            if self.seen_roots.insert(info.rpid) {
+                if item["rcount"].as_u64() != Some(0) {
+                    self.pending_sub.push_back(SubReplyCursor {
+                        root: info.rpid,
+                        next_page: 1,
+                    });
+                }
+                self.seen_ids.insert(info.rpid);
+                replies.push(info);
+            }
+        }
+        Ok(replies)
+    }
+
+    /// 热门接口计数有缺口或游标停滞时，用完整列表补齐；重复的已保存评论不重复入库。
+    fn apply_legacy_main_page(&mut self, data: &Value) -> Result<Vec<ReplyInfo>> {
+        let page = self.legacy_next_page.unwrap_or(1);
+        let pagination = data["page"].as_object().context("missing full reply list pagination")?;
+        let number = pagination
+            .get("num")
+            .and_then(Value::as_u64)
+            .context("invalid full reply page number")?;
+        ensure!(
+            number == page,
+            "full reply list returned page {number} instead of {page}"
+        );
+        let items = match &data["replies"] {
+            Value::Array(items) => items.as_slice(),
+            Value::Null => &[],
+            _ => anyhow::bail!("invalid full reply list"),
+        };
+        if !items.is_empty() {
+            let ids = items
+                .iter()
+                .map(|item| item["rpid"].as_i64().context("invalid full reply id"))
+                .collect::<Result<Vec<_>>>()?;
+            ensure!(
+                self.used_offsets
+                    .insert(format!("full-list:{}", serde_json::to_string(&ids)?)),
+                "full reply list repeated a page"
+            );
+        }
+        let size = pagination
+            .get("size")
+            .and_then(Value::as_u64)
+            .filter(|n| *n > 0)
+            .unwrap_or(20);
+        self.legacy_finished = items.is_empty()
+            || match pagination.get("count").and_then(Value::as_u64) {
+                Some(count) => page.saturating_mul(size) >= count,
+                None => items.len() < size as usize,
+            };
+        self.legacy_next_page = Some(page + 1);
+        self.collect_main_replies(data)
     }
 
     fn apply_sub_page(&mut self, data: &Value) -> Result<Vec<ReplyInfo>> {
@@ -416,6 +518,52 @@ mod tests {
     }
 
     #[test]
+    fn pinned_replies_and_their_children_are_scanned_and_deduplicated() -> Result<()> {
+        let mut state = ReplySyncState::default();
+        let mut page = main_page(&[1], true, "");
+        page["top_replies"] = json!([reply_value(2, 1), reply_value(1, 0)]);
+        page["top"] = json!({"upper":reply_value(2, 1),"admin":reply_value(3, 0),"vote":null});
+        assert_eq!(state.apply_main_page(&page)?.len(), 3);
+        assert_eq!(state.seen_ids, HashSet::from([1, 2, 3]));
+        assert_eq!(state.pending_sub.len(), 1);
+        assert!(!state.is_complete());
+        state.apply_sub_page(&json!({"page":{"num":1,"size":20,"count":1},"replies":[reply_value(4,0)]}))?;
+        assert_eq!(state.seen_ids, HashSet::from([1, 2, 3, 4]));
+        assert!(state.is_complete());
+        Ok(())
+    }
+
+    #[test]
+    fn complete_list_checkpoint_resumes_and_finishes_when_public_count_is_overstated() -> Result<()> {
+        let mut state = ReplySyncState::default();
+        let mut hot = main_page(&[1], true, "");
+        hot["cursor"]["all_count"] = json!(3);
+        state.apply_main_page(&hot)?;
+        assert!(!state.is_complete());
+        state.apply_legacy_main_page(&json!({"page":{"num":1,"size":1,"count":3},"replies":[reply_value(1,0)]}))?;
+        let mut resumed: ReplySyncState = serde_json::from_value(serde_json::to_value(state)?)?;
+        assert_eq!(resumed.legacy_next_page, Some(2));
+        assert!(!resumed.is_complete());
+        // 页码错误或重复页面都不能把历史评论误判为失效。
+        assert!(
+            resumed
+                .clone()
+                .apply_legacy_main_page(&json!({"page":{"num":1,"size":1,"count":3},"replies":[reply_value(2,0)]}))
+                .is_err()
+        );
+        assert!(
+            resumed
+                .clone()
+                .apply_legacy_main_page(&json!({"page":{"num":2,"size":1,"count":3},"replies":[reply_value(1,0)]}))
+                .is_err()
+        );
+        resumed.apply_legacy_main_page(&json!({"page":{"num":2,"size":1,"count":3},"replies":[]}))?;
+        assert!(resumed.is_complete());
+        assert_eq!(resumed.seen_ids, HashSet::from([1]));
+        Ok(())
+    }
+
+    #[test]
     fn checkpoint_resumes_main_page_and_retains_seen_comments() -> Result<()> {
         let mut state = ReplySyncState::default();
         state.apply_main_page(&main_page(&[1], false, "page-two"))?;
@@ -442,7 +590,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_session_cursor_restarts_but_new_and_sub_reply_checkpoints_are_preserved() -> Result<()> {
+    fn older_cycles_restart_while_current_main_and_sub_checkpoints_are_preserved() -> Result<()> {
         let mut current = ReplySyncState::default();
         current.apply_main_page(&main_page(&[1], false, "session-offset"))?;
         assert!(!current.restart_legacy_pagination());
@@ -458,10 +606,13 @@ mod tests {
         let mut old_json = serde_json::to_value(&sub)?;
         old_json.as_object_mut().unwrap().remove("pagination_version");
         let mut legacy: ReplySyncState = serde_json::from_value(old_json)?;
-        assert!(!legacy.restart_legacy_pagination());
-        assert!(legacy.main_finished);
-        assert_eq!(legacy.pending_sub.front().unwrap().root, 1);
-        assert_eq!(legacy.seen_ids, HashSet::from([1]));
+        assert!(legacy.restart_legacy_pagination());
+        assert!(!legacy.main_finished);
+        assert!(legacy.pending_sub.is_empty());
+        assert!(legacy.seen_ids.is_empty());
+        let mut current_sub: ReplySyncState = serde_json::from_value(serde_json::to_value(&sub)?)?;
+        assert!(!current_sub.restart_legacy_pagination());
+        assert_eq!(current_sub.pending_sub.front().unwrap().root, 1);
         let mut old_json = serde_json::to_value(&current)?;
         old_json["pagination_version"] = json!(1);
         let mut legacy: ReplySyncState = serde_json::from_value(old_json)?;

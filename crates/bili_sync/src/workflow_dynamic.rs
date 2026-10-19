@@ -1055,7 +1055,7 @@ async fn sync_dynamic_replies(
         .context("invalid saved reply pagination state")?
         .unwrap_or_default();
     if state.restart_legacy_pagination() {
-        info!("动态 {dynamic_id} 的旧扫描需要重新初始化，保留本地历史，开始新的扫描周期");
+        info!("动态 {dynamic_id} 的旧扫描需要重新初始化以覆盖置顶与完整列表补漏，保留本地历史，开始新的扫描周期");
     }
     for _ in 0..MAX_REPLY_REQUESTS_PER_ROUND {
         if state.is_complete() {
@@ -1542,6 +1542,87 @@ mod tests {
             }
         }
         assert_eq!(reply::Entity::find().count(&db).await?, 3);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn complete_list_fills_a_missing_root_when_hot_cursor_claims_end() -> Result<()> {
+        let db = test_database().await?;
+        let model = insert_dynamic(&db, "missing-hot-root").await?;
+        let mut hot = main_response(1, true, "", 0);
+        hot["data"]["cursor"]["all_count"] = json!(2);
+        let full = json!({"code":0,"data":{"page":{"num":1,"size":20,"count":2},
+            "replies":[{"rpid":1,"ctime":1,"rcount":0},{"rpid":2,"ctime":1,"rcount":0}]}});
+        let (endpoint, queries, server) = mock_api(vec![hot, full]).await?;
+        let client = BiliClient::new();
+        let credential = Credential::default();
+        let api = Reply::for_test(&client, &credential, endpoint);
+        let directory = TestDirectory::new();
+        assert!(matches!(
+            sync_dynamic_replies(
+                &model,
+                1,
+                "123",
+                &directory.0,
+                &Downloader::new(client.client.clone()),
+                &api,
+                &db,
+                &Config::default()
+            )
+            .await?,
+            ReplySyncResult::Complete
+        ));
+        assert_eq!(
+            reply::Entity::find()
+                .filter(reply::Column::DynamicId.eq(&model.id))
+                .count(&db)
+                .await?,
+            2
+        );
+        assert!(queries.lock().unwrap()[1].contains(&("pn".into(), "1".into())));
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stalled_hot_cursor_switches_to_complete_list_without_losing_saved_pages() -> Result<()> {
+        let db = test_database().await?;
+        let model = insert_dynamic(&db, "stalled-hot").await?;
+        let full = json!({"code":0,"data":{"page":{"num":1,"size":20,"count":2},
+            "replies":[{"rpid":1,"ctime":1,"rcount":0},{"rpid":2,"ctime":1,"rcount":0}]}});
+        let (endpoint, queries, server) = mock_api(vec![
+            main_response(1, false, "page-two", 0),
+            main_response(1, false, "page-three", 0),
+            full,
+        ])
+        .await?;
+        let client = BiliClient::new();
+        let credential = Credential::default();
+        let api = Reply::for_test(&client, &credential, endpoint);
+        let directory = TestDirectory::new();
+        assert!(matches!(
+            sync_dynamic_replies(
+                &model,
+                1,
+                "123",
+                &directory.0,
+                &Downloader::new(client.client.clone()),
+                &api,
+                &db,
+                &Config::default()
+            )
+            .await?,
+            ReplySyncResult::Complete
+        ));
+        assert_eq!(
+            reply::Entity::find()
+                .filter(reply::Column::DynamicId.eq(&model.id))
+                .count(&db)
+                .await?,
+            2
+        );
+        assert_eq!(queries.lock().unwrap().len(), 3);
         server.abort();
         Ok(())
     }
