@@ -9,7 +9,6 @@ use axum::http::{StatusCode, header};
 use axum::response::Response;
 use axum::routing::{get, post};
 use bili_sync_entity::*;
-use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::{DatabaseConnection, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
@@ -242,50 +241,25 @@ pub async fn get_dynamic_detail(
         .clone()
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
-    // 展示全部本地评论：B 站已删除/失效的评论也属于用户要保留的历史记录。
-    let replies = reply::Entity::find()
-        .filter(reply::Column::DynamicId.eq(&dyn_id))
-        .order_by_asc(reply::Column::Ctime)
-        .all(&db)
-        .await?;
-    // 在内存中构建评论树
-    let mut reply_map = std::collections::HashMap::<i64, ReplyItem>::new();
-    for r in replies.iter() {
-        let images: Vec<String> = r
-            .images
-            .clone()
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default();
-        reply_map.insert(
-            r.rpid,
-            ReplyItem {
-                rpid: r.rpid,
-                parent_rpid: r.parent_rpid,
-                uname: r.uname.clone(),
-                avatar: r.avatar.clone(),
-                content: r.content.clone(),
-                images,
-                ctime: r.ctime,
-                valid: r.valid,
-                sub_replies: Vec::new(),
-            },
-        );
-    }
-    let mut top_replies = Vec::new();
-    for r in replies.iter() {
-        if let Some(parent_rpid) = r.parent_rpid
-            && reply_map.contains_key(&parent_rpid)
-        {
-            let sub = reply_map.remove(&r.rpid).expect("reply should exist");
-            reply_map
-                .get_mut(&parent_rpid)
-                .expect("parent reply should exist")
-                .sub_replies
-                .push(sub);
-        } else {
-            top_replies.push(reply_map.remove(&r.rpid).expect("reply should exist"));
+    // API 与离线归档共用组树逻辑；先建立父子索引，避免先取走父节点后拆散回复。
+    fn to_item(reply: crate::bilibili::ReplyInfo) -> ReplyItem {
+        ReplyItem {
+            rpid: reply.rpid,
+            parent_rpid: reply.parent_rpid,
+            uname: reply.uname,
+            avatar: reply.avatar,
+            content: reply.content,
+            images: reply.images,
+            ctime: reply.ctime.naive_utc(),
+            valid: reply.valid,
+            sub_replies: reply.sub_replies.into_iter().map(to_item).collect(),
         }
     }
+    let top_replies = crate::workflow_dynamic::load_local_replies(&dyn_id, &db)
+        .await?
+        .into_iter()
+        .map(to_item)
+        .collect();
     Ok(ApiResponse::ok(DynamicDetailResponse {
         id: dyn_model.id.clone(),
         dyn_type: dyn_model.dyn_type.clone(),
@@ -337,13 +311,8 @@ pub async fn rescan_all_replies(
         .all(&db)
         .await?;
     let count = dynamics.len();
-    for dyn_model in dynamics {
-        let mut model: dynamic::ActiveModel = dyn_model.into();
-        model.rescan_reply = Set(true);
-        model.reply_sync_state = Set(None);
-        model.reply_last_attempt_at = Set(None);
-        model.reply_synced_at = Set(None);
-        model.save(&db).await?;
+    if !crate::workflow_dynamic::queue_reply_rescans(&dynamics, &db).await? {
+        return Err(InnerApiError::BadRequest("同一评论区正在同步，请待本轮完成后重试重扫评论".into()).into());
     }
     Ok(ApiResponse::ok(count))
 }
@@ -366,12 +335,9 @@ pub async fn rescan_single_reply(
     if dyn_model.source_id != source.id {
         return Err(InnerApiError::BadRequest("dynamic does not belong to this source".to_string()).into());
     }
-    let mut model: dynamic::ActiveModel = dyn_model.into();
-    model.rescan_reply = Set(true);
-    model.reply_sync_state = Set(None);
-    model.reply_last_attempt_at = Set(None);
-    model.reply_synced_at = Set(None);
-    model.save(&db).await?;
+    if !crate::workflow_dynamic::queue_reply_rescans(&[dyn_model], &db).await? {
+        return Err(InnerApiError::BadRequest("同一评论区正在同步，请待本轮完成后重试重扫评论".into()).into());
+    }
     Ok(ApiResponse::ok(true))
 }
 
@@ -379,6 +345,7 @@ pub async fn rescan_single_reply(
 mod tests {
     use axum::response::IntoResponse;
     use bili_sync_migration::{Migrator, MigratorTrait};
+    use sea_orm::ActiveValue::Set;
     use sea_orm::{ConnectOptions, Database};
     use serde_json::json;
     use tokio::time::{Duration, timeout};
@@ -456,6 +423,67 @@ mod tests {
         assert!(reset.reply_last_attempt_at.is_none());
         assert!(reset.reply_synced_at.is_none());
         assert_eq!(reset.download_status, STATUS_COMPLETED);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dynamic_detail_preserves_reply_threads_and_orphan_history() -> Result<()> {
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(1).sqlx_logging(false);
+        let db = Database::connect(options).await?;
+        Migrator::up(&db, None).await?;
+        let now = chrono::Utc::now().naive_utc();
+        dynamic_source::ActiveModel {
+            id: Set(1_000_001),
+            upper_id: Set(123),
+            upper_name: Set("test".into()),
+            path: Set(String::new()),
+            created_at: Set(now),
+            latest_dyn_at: Set(now),
+            sync_reply: Set(true),
+            enabled: Set(true),
+        }
+        .insert(&db)
+        .await?;
+        let model = dynamic::Model {
+            id: "detail-tree".into(),
+            source_id: 1_000_001,
+            ..Default::default()
+        };
+        let active: dynamic::ActiveModel = model.into();
+        active.reset_all().insert(&db).await?;
+        for (rpid, parent_rpid, valid) in [
+            (1, None, false),
+            (2, Some(1), true),
+            (3, Some(2), true),
+            (4, Some(999), true),
+        ] {
+            reply::ActiveModel {
+                rpid: Set(rpid),
+                dynamic_id: Set("detail-tree".into()),
+                parent_rpid: Set(parent_rpid),
+                uname: Set(format!("user-{rpid}")),
+                avatar: Set(String::new()),
+                content: Set(format!("reply-{rpid}")),
+                ctime: Set(now + chrono::Duration::seconds(rpid)),
+                valid: Set(valid),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await?;
+        }
+        let response = get_dynamic_detail(Path((1_000_001, "detail-tree".into())), Extension(db))
+            .await
+            .map_err(|_| anyhow::anyhow!("detail request failed"))?;
+        let body = serde_json::to_value(response)?;
+        let replies = body["data"]["replies"].as_array().unwrap();
+        assert_eq!(replies.len(), 2);
+        assert_eq!(replies[0]["rpid"], 1);
+        assert_eq!(replies[0]["valid"], false);
+        assert_eq!(replies[0]["subReplies"][0]["rpid"], 2);
+        assert_eq!(replies[0]["subReplies"][0]["subReplies"][0]["rpid"], 3);
+        assert_eq!(replies[1]["rpid"], 4);
+        assert_eq!(replies[1]["parentRpid"], 999);
         Ok(())
     }
 }

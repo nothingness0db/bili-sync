@@ -86,6 +86,50 @@ fn get_reply_lock(comment_type: i64, oid: &str) -> std::sync::Arc<tokio::sync::M
         .clone()
 }
 
+/// 手动重扫使整个评论对象的缓存失效，而不是只清空一个可立即复用旧副本的动态。
+/// 先拿齐对象锁，再原子更新；遇到任一正在扫描的对象时，不覆盖任何断点。
+pub(crate) async fn queue_reply_rescans(dynamics: &[dynamic::Model], connection: &DatabaseConnection) -> Result<bool> {
+    let objects = dynamics
+        .iter()
+        .map(|model| ((model.comment_type, model.comment_oid.clone()), model))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut guards = Vec::with_capacity(objects.len());
+    for (comment_type, oid) in objects.keys() {
+        let Ok(guard) = get_reply_lock(*comment_type, oid).try_lock_owned() else {
+            return Ok(false);
+        };
+        guards.push(guard);
+    }
+    let txn = connection.begin().await?;
+    for model in dynamics {
+        let mut scope = Condition::any().add(dynamic::Column::Id.eq(&model.id));
+        if model.comment_type > 0 && !model.comment_oid.is_empty() {
+            scope = scope.add(
+                Condition::all()
+                    .add(dynamic::Column::Valid.eq(true))
+                    .add(dynamic::Column::CommentType.eq(model.comment_type))
+                    .add(dynamic::Column::CommentOid.eq(&model.comment_oid)),
+            );
+        }
+        dynamic::Entity::update_many()
+            .filter(scope)
+            .col_expr(dynamic::Column::RescanReply, Expr::value(true))
+            .col_expr(dynamic::Column::ReplySyncState, Expr::value(Option::<Value>::None))
+            .col_expr(
+                dynamic::Column::ReplyLastAttemptAt,
+                Expr::value(Option::<chrono::NaiveDateTime>::None),
+            )
+            .col_expr(
+                dynamic::Column::ReplySyncedAt,
+                Expr::value(Option::<chrono::NaiveDateTime>::None),
+            )
+            .exec(&txn)
+            .await?;
+    }
+    txn.commit().await?;
+    Ok(true)
+}
+
 /// 每条动态每轮最多发起的评论请求总数（顶级与楼中楼共用预算）。
 const MAX_REPLY_REQUESTS_PER_ROUND: usize = 50;
 /// 动态发布后自动同步评论的时间窗口（天）
@@ -830,6 +874,11 @@ async fn process_dynamic(
 ) -> Result<()> {
     let lock = get_reply_lock(dyn_model.comment_type, &dyn_model.comment_oid);
     let _reply_guard = lock.lock().await;
+    // 其他源的手动重扫可能在本源取出批次之后重置共享对象，必须使用锁内的新状态。
+    let dyn_model = dynamic::Entity::find_by_id(&dyn_model.id)
+        .one(connection)
+        .await?
+        .context("dynamic disappeared before processing")?;
     // 目录格式 {path}/{YYYY-MM-DD} {dyn_id}
     let dir = PathBuf::from(&source.path).join(format!("{} {}", dyn_model.pub_ts.format("%Y-%m-%d"), dyn_model.id));
     fs::create_dir_all(&dir).await?;
@@ -1152,7 +1201,7 @@ async fn export_local_replies(
 
 /// 从本地数据库读取某条动态的全部评论历史，并重建评论树。
 /// `valid` 只作为展示状态，不作为过滤条件。
-async fn load_local_replies(dynamic_id: &str, connection: &DatabaseConnection) -> Result<Vec<ReplyInfo>> {
+pub(crate) async fn load_local_replies(dynamic_id: &str, connection: &DatabaseConnection) -> Result<Vec<ReplyInfo>> {
     let rows = reply::Entity::find()
         .filter(reply::Column::DynamicId.eq(dynamic_id))
         .order_by_asc(reply::Column::Ctime)
@@ -1905,6 +1954,126 @@ mod tests {
             assert!(!dynamic::Entity::find_by_id(id).one(&db).await?.unwrap().rescan_reply);
         }
         server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn manual_shared_rescan_invalidates_all_copies_and_uses_enabled_owner() -> Result<()> {
+        for requested in ["b-owner", "c-peer"] {
+            let db = test_database().await?;
+            for (id, enabled) in [(1, false), (2, true), (3, true)] {
+                let mut src = source();
+                src.id = id;
+                src.upper_id = i64::from(id);
+                src.enabled = enabled;
+                let active: dynamic_source::ActiveModel = src.into();
+                active.reset_all().insert(&db).await?;
+            }
+            let finished_at = chrono::Utc::now().naive_utc();
+            for (id, source_id) in [("a-disabled", 1), ("b-owner", 2), ("c-peer", 3)] {
+                let mut row: dynamic::ActiveModel = insert_dynamic(&db, id).await?.into();
+                row.source_id = Set(source_id);
+                row.comment_oid = Set(format!("manual-rescan-{requested}"));
+                row.rescan_reply = Set(false);
+                row.reply_synced_at = Set(Some(finished_at));
+                row.save(&db).await?;
+                save_replies(id, &[comment(42)], &db).await?;
+            }
+            // 模拟调度器在手动请求之前就取出批次，锁内重读必须覆盖旧缓存快照。
+            let stale_owner = dynamic::Entity::find_by_id("b-owner").one(&db).await?.unwrap();
+            let requested_model = dynamic::Entity::find_by_id(requested).one(&db).await?.unwrap();
+            assert!(queue_reply_rescans(&[requested_model], &db).await?);
+            let (endpoint, queries, server) = mock_api(vec![main_response(43, true, "", 0)]).await?;
+            let client = BiliClient::new();
+            let credential = Credential::default();
+            let api = Reply::for_test(&client, &credential, endpoint);
+            let dir = TestDirectory::new();
+            let mut src = source();
+            src.id = 2;
+            src.path = dir.0.to_string_lossy().into();
+            let downloader = Downloader::new(client.client.clone());
+            let config = Config::default();
+            let peer = dynamic::Entity::find_by_id("c-peer").one(&db).await?.unwrap();
+            process_dynamic(&src, peer, &downloader, &api, &db, &config).await?;
+            assert_eq!(queries.lock().unwrap().len(), 0);
+            process_dynamic(&src, stale_owner, &downloader, &api, &db, &config).await?;
+            let peer = dynamic::Entity::find_by_id("c-peer").one(&db).await?.unwrap();
+            process_dynamic(&src, peer, &downloader, &api, &db, &config).await?;
+            assert_eq!(queries.lock().unwrap().len(), 1);
+            for id in ["b-owner", "c-peer"] {
+                let row = dynamic::Entity::find_by_id(id).one(&db).await?.unwrap();
+                assert!(!row.rescan_reply);
+                assert!(row.reply_synced_at.is_some_and(|at| at >= finished_at));
+                assert!(
+                    reply::Entity::find_by_id((43, id.to_owned()))
+                        .one(&db)
+                        .await?
+                        .unwrap()
+                        .valid
+                );
+                assert!(
+                    !reply::Entity::find_by_id((42, id.to_owned()))
+                        .one(&db)
+                        .await?
+                        .unwrap()
+                        .valid
+                );
+            }
+            server.abort();
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_rescan_batch_is_atomic_when_another_object_is_busy() -> Result<()> {
+        let db = test_database().await?;
+        let mut first: dynamic::ActiveModel = insert_dynamic(&db, "batch-first").await?.into();
+        first.comment_oid = Set("batch-first-object".into());
+        let first = first.update(&db).await?;
+        let mut second: dynamic::ActiveModel = insert_dynamic(&db, "batch-second").await?.into();
+        second.comment_oid = Set("batch-second-object".into());
+        let second = second.update(&db).await?;
+        let lock = get_reply_lock(1, "batch-second-object");
+        let guard = lock.lock().await;
+        assert!(!queue_reply_rescans(&[first.clone(), second.clone()], &db).await?);
+        assert_eq!(dynamic::Entity::find_by_id(&first.id).one(&db).await?.unwrap(), first);
+        assert_eq!(dynamic::Entity::find_by_id(&second.id).one(&db).await?.unwrap(), second);
+        drop(guard);
+        assert!(queue_reply_rescans(&[first, second], &db).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_rescan_queue_survives_database_reopen() -> Result<()> {
+        let dir = TestDirectory::new();
+        std::fs::create_dir_all(&dir.0)?;
+        let url = format!("sqlite://{}?mode=rwc", dir.0.join("queue.sqlite").display());
+        let db = Database::connect(&url).await?;
+        Migrator::up(&db, None).await?;
+        let first = insert_dynamic(&db, "restart-owner").await?;
+        insert_dynamic(&db, "restart-peer").await?;
+        dynamic::Entity::update_many()
+            .col_expr(dynamic::Column::CommentOid, Expr::value("restart-object"))
+            .exec(&db)
+            .await?;
+        let first = dynamic::Entity::find_by_id(&first.id).one(&db).await?.unwrap();
+        dynamic::Entity::update_many()
+            .col_expr(dynamic::Column::RescanReply, Expr::value(false))
+            .col_expr(
+                dynamic::Column::ReplySyncedAt,
+                Expr::value(chrono::Utc::now().naive_utc()),
+            )
+            .exec(&db)
+            .await?;
+        assert!(queue_reply_rescans(&[first], &db).await?);
+        db.close().await?;
+        let db = Database::connect(&url).await?;
+        for row in dynamic::Entity::find().all(&db).await? {
+            assert!(row.rescan_reply);
+            assert!(row.reply_sync_state.is_none());
+            assert!(row.reply_synced_at.is_none());
+        }
+        db.close().await?;
         Ok(())
     }
 

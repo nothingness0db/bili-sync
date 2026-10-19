@@ -72,11 +72,54 @@ fn render_comment(reply: &ReplyInfo, depth: usize, index: usize) -> String {
     }
     if !reply.images.is_empty() {
         for (i, _) in reply.images.iter().enumerate() {
-            out.push_str(&format!("{indent}![图片](comments/{}_{}.jpg)\n\n", reply.rpid, i + 1));
+            out.push_str(&format!("{indent}![图片]({}_{}.jpg)\n\n", reply.rpid, i + 1));
         }
     }
     for (i, sub) in reply.sub_replies.iter().enumerate() {
         out.push_str(&render_comment(sub, depth + 1, i + 1));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comment_images_resolve_beside_the_exported_markdown() {
+        let mut root = ReplyInfo {
+            rpid: 42,
+            parent_rpid: None,
+            uname: "root".into(),
+            avatar: String::new(),
+            content: "comment".into(),
+            images: vec![
+                "https://example.invalid/1.jpg".into(),
+                "https://example.invalid/2.jpg".into(),
+            ],
+            ctime: chrono::Utc::now(),
+            valid: true,
+            raw: serde_json::Value::Null,
+            sub_replies: Vec::new(),
+        };
+        let mut child = root.clone();
+        child.rpid = 43;
+        child.parent_rpid = Some(42);
+        child.images.truncate(1);
+        root.sub_replies.push(child);
+        let markdown = render_comments_md(&[root]);
+        let directory = std::path::Path::new("/archive/dynamic/comments");
+        let links = markdown
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix("![图片](")
+                    .and_then(|link| link.strip_suffix(')'))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(links, ["42_1.jpg", "42_2.jpg", "43_1.jpg"]);
+        for (link, filename) in links.iter().zip(["42_1.jpg", "42_2.jpg", "43_1.jpg"]) {
+            assert_eq!(directory.join(link), directory.join(filename));
+        }
+    }
 }
