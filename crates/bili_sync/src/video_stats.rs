@@ -92,19 +92,24 @@ pub async fn record_video_available(
     db: &impl ConnectionTrait,
 ) -> Result<()> {
     let cleared = video_availability::Entity::delete_by_id(bvid).exec(db).await?;
-    if cleared.rows_affected > 0 {
-        video::Entity::update_many()
-            .filter(video::Column::Bvid.eq(bvid))
-            .col_expr(
-                video::Column::Valid,
-                Expr::value(info.is_downloadable(try_upower_anyway)),
-            )
-            .col_expr(
-                video::Column::DeletedAt,
-                Expr::value(Option::<chrono::NaiveDateTime>::None),
-            )
-            .exec(db)
-            .await?;
+    let mut update = video::Entity::update_many().filter(video::Column::Bvid.eq(bvid));
+    if cleared.rows_affected == 0 {
+        // 兼容状态缓存表创建前的删除记录；详情已确认可见时，删除标记必须独立清除。
+        // 不触碰其他没有删除标记的记录，保留原有权限/过滤判断。
+        update = update.filter(video::Column::DeletedAt.is_not_null());
+    }
+    let restored = update
+        .col_expr(
+            video::Column::Valid,
+            Expr::value(info.is_downloadable(try_upower_anyway)),
+        )
+        .col_expr(
+            video::Column::DeletedAt,
+            Expr::value(Option::<chrono::NaiveDateTime>::None),
+        )
+        .exec(db)
+        .await?;
+    if cleared.rows_affected > 0 || restored.rows_affected > 0 {
         info!("视频 {} 已恢复可见，恢复统计采样，保留本地文件和历史统计", bvid);
     }
     Ok(())
@@ -485,6 +490,56 @@ mod tests {
             assert_eq!(row.download_status, 123);
         }
         assert_eq!(video_stat::Entity::find().count(&db).await?, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn visible_legacy_deleted_records_recover_without_cached_availability() -> Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+        let bvid = "BV1xx411c7mD";
+        for (id, valid, deleted) in [(1, false, true), (2, true, true), (3, false, false)] {
+            video::Model {
+                id,
+                submission_id: Some(id),
+                bvid: bvid.into(),
+                valid,
+                deleted_at: deleted.then(|| Utc::now().naive_utc()),
+                should_download: false,
+                download_status: 123,
+                path: format!("/saved/{id}"),
+                ..Default::default()
+            }
+            .into_active_model()
+            .insert(&db)
+            .await?;
+        }
+        assert_eq!(video_availability::Entity::find().count(&db).await?, 0);
+        let mut visible_but_locked = detail(json!({"view": 42}));
+        if let VideoInfo::Detail {
+            is_upower_exclusive, ..
+        } = &mut visible_but_locked
+        {
+            *is_upower_exclusive = true;
+        }
+        // 可见但没有下载权限，也必须从“已删除”移到“失效”；重置后 valid=true 的旧行同样适用。
+        save_sample_result(bvid, Ok(visible_but_locked), &db).await?;
+        for row in video::Entity::find().all(&db).await? {
+            assert!(row.deleted_at.is_none());
+            assert!(!row.valid);
+            assert!(!row.should_download);
+            assert_eq!(row.download_status, 123);
+            assert_eq!(row.path, format!("/saved/{}", row.id));
+        }
+        assert_eq!(sample_decision(bvid, Utc::now(), &db).await?, SampleDecision::Fetch);
+        assert_eq!(video_stat::Entity::find().count(&db).await?, 1);
+        // 普通可见视频恢复为有效，不影响同 BV 下没有删除标记的原无效记录。
+        db.execute_unprepared("UPDATE video SET deleted_at='2026-01-01 00:00:00' WHERE id IN (1,2)")
+            .await?;
+        save_sample_result(bvid, Ok(detail(json!({"view": 43}))), &db).await?;
+        assert!(video::Entity::find_by_id(1).one(&db).await?.unwrap().valid);
+        assert!(video::Entity::find_by_id(2).one(&db).await?.unwrap().valid);
+        assert!(!video::Entity::find_by_id(3).one(&db).await?.unwrap().valid);
         Ok(())
     }
 
