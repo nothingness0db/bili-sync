@@ -198,6 +198,27 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(ids, expected);
         }
+        let deleted = video::Entity::find_by_id(4)
+            .into_partial_model::<VideoInfo>()
+            .one(&db)
+            .await?
+            .unwrap();
+        let serialized = serde_json::to_value(&deleted)?;
+        let timestamp = serialized["deleted_at"].as_str().unwrap();
+        assert!(
+            timestamp.ends_with('Z'),
+            "UTC deletion timestamps need an explicit time zone"
+        );
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(timestamp)?.naive_utc(),
+            deleted.deleted_at.unwrap()
+        );
+        let normal = video::Entity::find_by_id(1)
+            .into_partial_model::<VideoInfo>()
+            .one(&db)
+            .await?
+            .unwrap();
+        assert!(serde_json::to_value(normal)?["deleted_at"].is_null());
         Ok(())
     }
 }

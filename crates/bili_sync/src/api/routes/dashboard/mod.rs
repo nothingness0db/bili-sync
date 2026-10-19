@@ -161,3 +161,24 @@ ORDER BY
         videos_by_day,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bili_sync_migration::{Migrator, MigratorTrait};
+    use sea_orm::Database;
+
+    #[tokio::test]
+    async fn task_board_reports_idle_without_a_scan() -> anyhow::Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+        let response = get_task_board(Extension(db))
+            .await
+            .unwrap_or_else(|_| panic!("task board should load with an empty database"));
+        let body = serde_json::to_value(response)?;
+        assert_eq!(body["data"]["scanTask"]["state"], "idle");
+        assert_eq!(body["data"]["scanTask"]["total"], 0);
+        assert_eq!(body["data"]["videoTask"]["running"], false);
+        Ok(())
+    }
+}

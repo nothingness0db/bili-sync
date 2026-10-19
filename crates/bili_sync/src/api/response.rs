@@ -196,6 +196,7 @@ pub struct VideoInfo {
     pub upper_name: String,
     pub valid: bool,
     /// 被标记为已删除的时间，null 表示未被标记
+    #[serde(serialize_with = "serialize_optional_utc")]
     pub deleted_at: Option<DateTime>,
     pub should_download: bool,
     #[serde(serialize_with = "serde_video_download_status")]
@@ -204,6 +205,10 @@ pub struct VideoInfo {
     pub favorite_id: Option<i32>,
     pub submission_id: Option<i32>,
     pub watch_later_id: Option<i32>,
+}
+
+fn serialize_optional_utc<S: serde::Serializer>(value: &Option<DateTime>, serializer: S) -> Result<S::Ok, S::Error> {
+    value.map(|time| time.and_utc()).serialize(serializer)
 }
 
 #[derive(Serialize, DerivePartialModel, FromQueryResult)]

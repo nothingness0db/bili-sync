@@ -41,7 +41,7 @@ pub(super) use playback::stream_router;
 static SCAN_DEAD_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// 删除检测任务的实时进度（供看板展示）
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ScanTaskProgress {
     /// idle / queued / running
     pub state: String,
@@ -53,6 +53,19 @@ pub struct ScanTaskProgress {
     pub confirm_current: usize,
     /// 当前源内差集待确认总数
     pub confirm_total: usize,
+}
+
+impl Default for ScanTaskProgress {
+    fn default() -> Self {
+        Self {
+            state: "idle".to_string(),
+            current: 0,
+            total: 0,
+            current_source: String::new(),
+            confirm_current: 0,
+            confirm_total: 0,
+        }
+    }
 }
 
 static SCAN_TASK_PROGRESS: LazyLock<parking_lot::RwLock<ScanTaskProgress>> =
