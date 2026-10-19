@@ -43,3 +43,5 @@ pub fn init_logger(log_level: &str, log_writer: Option<LogHelper>) {
         log.try_init().expect("初始化日志失败");
     }
 }
+
+pub mod task_priority;

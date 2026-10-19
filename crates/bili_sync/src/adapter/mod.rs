@@ -27,6 +27,7 @@ use bili_sync_entity::watch_later::Model as WatchLater;
 use crate::bilibili::{BiliClient, Credential, VideoInfo};
 
 #[enum_dispatch]
+#[derive(Clone)]
 pub enum VideoSourceEnum {
     Favorite,
     Collection,

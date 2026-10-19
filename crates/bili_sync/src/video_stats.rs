@@ -173,7 +173,7 @@ pub fn snapshot_from_info(info: &VideoInfo, recorded_at: DateTime<Utc>) -> Optio
     })
 }
 
-/// 同一轮中复用已获取的详情；返回 Some(false) 表示确认删除，None 表示无法确认或仍在不可见暂停期。
+/// 跨源复用最近一小时的详情；返回 Some(false) 表示确认删除，None 表示无法确认或仍在不可见暂停期。
 /// 明确不可用时顺带标记本地视频失效，不写伪造的快照；风控立即向上抛出终止本轮。
 pub async fn sample_video(
     bvid: &str,
@@ -191,13 +191,17 @@ pub async fn sample_video(
     }
     if video_stat::Entity::find()
         .filter(video_stat::Column::Bvid.eq(bvid))
-        .filter(video_stat::Column::RecordedAt.gte(since.naive_utc()))
+        .filter(
+            video_stat::Column::RecordedAt
+                .gte(std::cmp::min(since, Utc::now() - chrono::Duration::hours(1)).naive_utc()),
+        )
         .one(db)
         .await?
         .is_some()
     {
         return Ok(Some(true));
     }
+    let _priority = crate::utils::task_priority::background_permit().await;
     tokio::time::sleep(Duration::from_millis(400)).await;
     save_sample_result(
         bvid,
@@ -307,6 +311,30 @@ mod tests {
             Some(true)
         );
         assert_eq!(video_stat::Entity::find().count(&db).await?, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recent_snapshot_is_reused_across_new_rounds_and_sources() -> Result<()> {
+        let db = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&db, None).await?;
+        save_sample_result("BV1xx411c7mD", Ok(detail(json!({"view": 42}))), &db).await?;
+        db.execute_unprepared("UPDATE video_stat SET recorded_at = datetime('now','-20 minutes')")
+            .await?;
+        // 新一轮开始时间晚于旧样本，仍应复用一小时缓存，不能发真实网络请求。
+        assert_eq!(
+            sample_video(
+                "BV1xx411c7mD",
+                Utc::now(),
+                &BiliClient::new(),
+                &Credential::default(),
+                &db,
+                false
+            )
+            .await?,
+            Some(true)
+        );
+        assert_eq!(video_stat::Entity::find().count(&db).await?, 1);
         Ok(())
     }
 

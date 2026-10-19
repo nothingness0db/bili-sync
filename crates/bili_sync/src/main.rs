@@ -58,7 +58,14 @@ async fn main() {
 
     spawn_task(
         "定时下载",
-        video_downloader(connection.clone(), bili_client),
+        video_downloader(connection.clone(), bili_client.clone()),
+        &tracker,
+        token.clone(),
+    );
+
+    spawn_task(
+        "评论队列",
+        workflow_dynamic::reply_worker(connection.clone(), bili_client),
         &tracker,
         token.clone(),
     );

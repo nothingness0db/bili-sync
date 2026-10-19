@@ -51,7 +51,6 @@ pub async fn process_video_source(
     connection: &DatabaseConnection,
     template: &handlebars::Handlebars<'_>,
     config: &Config,
-    sampling_started_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
     // 预创建视频源目录，提前检测目录是否可写
     video_source.create_dir_all().await?;
@@ -63,6 +62,36 @@ pub async fn process_video_source(
     refresh_video_source(&video_source, video_streams, connection).await?;
     // 单独请求视频详情接口，获取视频的详情信息与所有的分页，写入数据库
     fetch_video_details(bili_client, &video_source, connection, config).await?;
+    // 根据弹幕更新规则清空弹幕任务的标记位，允许后续任务覆盖
+    let danmaku_update_video_ids = prepare_danmaku_updates(&video_source, connection, config).await?;
+    if ARGS.scan_only {
+        warn!("已开启仅扫描模式，跳过视频下载..");
+    } else {
+        // 从数据库中查找所有未下载的视频与分页，下载并处理
+        let download_notify_info = download_unprocessed_videos(
+            bili_client,
+            &video_source,
+            connection,
+            template,
+            config,
+            &danmaku_update_video_ids,
+        )
+        .await?;
+        if download_notify_info.should_notify() {
+            notify(config, bili_client, download_notify_info);
+        }
+    }
+    Ok(())
+}
+
+/// 统计独立放在下载与评论之后；不阻塞新视频的下载。
+pub async fn sample_video_source(
+    video_source: &VideoSourceEnum,
+    bili_client: &BiliClient,
+    connection: &DatabaseConnection,
+    config: &Config,
+    sampling_started_at: chrono::DateTime<chrono::Utc>,
+) -> Result<()> {
     // 完成下载的视频也持续采样；按 BV 号复用本轮已获取的详情，避免跨视频源重复请求。
     let bvids = video::Entity::find()
         .filter(video_source.filter_expr())
@@ -74,7 +103,7 @@ pub async fn process_video_source(
         .into_iter()
         .map(|v| v.bvid)
         .collect::<std::collections::BTreeSet<_>>();
-    if let VideoSourceEnum::Submission(source) = &video_source {
+    if let VideoSourceEnum::Submission(source) = video_source {
         crate::video_stats::track_source_videos(
             source.upper_id,
             &bvids.iter().cloned().collect::<Vec<_>>(),
@@ -95,25 +124,6 @@ pub async fn process_video_source(
         .await?;
     }
     info!("采样{}视频统计完成", video_source.display_name());
-    // 根据弹幕更新规则清空弹幕任务的标记位，允许后续任务覆盖
-    let danmaku_update_video_ids = prepare_danmaku_updates(&video_source, connection, config).await?;
-    if ARGS.scan_only {
-        warn!("已开启仅扫描模式，跳过视频下载..");
-    } else {
-        // 从数据库中查找所有未下载的视频与分页，下载并处理
-        let download_notify_info = download_unprocessed_videos(
-            bili_client,
-            &video_source,
-            connection,
-            template,
-            config,
-            &danmaku_update_video_ids,
-        )
-        .await?;
-        if download_notify_info.should_notify() {
-            notify(config, bili_client, download_notify_info);
-        }
-    }
     Ok(())
 }
 

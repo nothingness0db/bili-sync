@@ -13,8 +13,8 @@ use crate::bilibili::{self, BiliClient, BiliError};
 use crate::config::{ARGS, Config, TEMPLATE, Trigger, VersionedConfig};
 use crate::utils::model::{get_enabled_dynamic_sources, get_enabled_video_sources};
 use crate::utils::notify::error_and_notify;
-use crate::workflow::process_video_source;
-use crate::workflow_dynamic::process_dynamic_source;
+use crate::workflow::{process_video_source, sample_video_source};
+use crate::workflow_dynamic::{process_dynamic_source, sample_dynamic_source};
 
 static INSTANCE: OnceCell<DownloadTaskManager> = OnceCell::const_new();
 
@@ -391,7 +391,8 @@ async fn download_video(
     }
     let total_video_sources = video_sources.len();
     let sampling_started_at = chrono::Utc::now();
-    for (idx, video_source) in video_sources.into_iter().enumerate() {
+    let video_priority = crate::utils::task_priority::video_permit().await;
+    for (idx, video_source) in video_sources.iter().enumerate() {
         let display_name = video_source.display_name();
         set_video_task_progress(VideoTaskProgress {
             phase: "处理视频源".to_string(),
@@ -399,16 +400,7 @@ async fn download_video(
             current_source_index: idx + 1,
             total_sources: total_video_sources,
         });
-        if let Err(e) = process_video_source(
-            video_source,
-            &bili_client,
-            connection,
-            &template,
-            config,
-            sampling_started_at,
-        )
-        .await
-        {
+        if let Err(e) = process_video_source(video_source.clone(), &bili_client, connection, &template, config).await {
             error_and_notify(
                 config,
                 &bili_client,
@@ -424,11 +416,12 @@ async fn download_video(
             }
         }
     }
-    // 处理动态源
+    drop(video_priority);
+    // 视频处理完毕后，扫描动态并处理评论。
     let dynamic_sources = get_enabled_dynamic_sources(connection)
         .await
         .context("获取动态源列表失败")?;
-    for dynamic_source in dynamic_sources {
+    for dynamic_source in &dynamic_sources {
         let display_name = dynamic_source.upper_name.clone();
         set_video_task_progress(VideoTaskProgress {
             phase: "处理动态源".to_string(),
@@ -436,7 +429,7 @@ async fn download_video(
             current_source_index: 0,
             total_sources: 0,
         });
-        if let Err(e) = process_dynamic_source(dynamic_source, &bili_client, connection, config).await {
+        if let Err(e) = process_dynamic_source(dynamic_source.clone(), &bili_client, connection, config).await {
             error_and_notify(
                 config,
                 &bili_client,
@@ -447,6 +440,43 @@ async fn download_video(
                 && e.is_risk_control_related()
             {
                 warn!("检测到风控，终止此轮视频下载任务..");
+                set_video_task_progress(VideoTaskProgress::default());
+                return Ok(());
+            }
+        }
+    }
+    // 统计始终放在所有视频和本轮评论之后。
+    for video_source in &video_sources {
+        set_video_task_progress(VideoTaskProgress {
+            phase: "视频统计".into(),
+            current_target: video_source.display_name().to_string(),
+            ..Default::default()
+        });
+        if let Err(error) =
+            sample_video_source(video_source, &bili_client, connection, config, sampling_started_at).await
+        {
+            warn!("{} 视频统计失败：{error:#}", video_source.display_name());
+            if error
+                .downcast_ref::<BiliError>()
+                .is_some_and(|e| e.is_risk_control_related())
+            {
+                set_video_task_progress(VideoTaskProgress::default());
+                return Ok(());
+            }
+        }
+    }
+    for source in &dynamic_sources {
+        set_video_task_progress(VideoTaskProgress {
+            phase: "账号快照".into(),
+            current_target: source.upper_name.clone(),
+            ..Default::default()
+        });
+        if let Err(error) = sample_dynamic_source(source, &bili_client, connection, config).await {
+            warn!("「{}」账号快照失败：{error:#}", source.upper_name);
+            if error
+                .downcast_ref::<BiliError>()
+                .is_some_and(|e| e.is_risk_control_related())
+            {
                 break;
             }
         }

@@ -9,7 +9,7 @@ use futures::{StreamExt, stream};
 use sea_orm::ActiveValue::Set;
 use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::{Condition, OnConflict};
-use sea_orm::{ConnectionTrait, QueryOrder, TransactionTrait};
+use sea_orm::{ConnectionTrait, QueryOrder, Statement, TransactionTrait};
 use serde_json::Value;
 use tokio::fs;
 
@@ -73,10 +73,37 @@ pub(crate) fn get_source_lock(source_id: i32) -> std::sync::Arc<tokio::sync::Mut
         .clone()
 }
 
+type ReplyObject = (i64, String);
+static REPLY_LOCKS: LazyLock<StdMutex<HashMap<ReplyObject, std::sync::Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+fn get_reply_lock(comment_type: i64, oid: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    REPLY_LOCKS
+        .lock()
+        .unwrap()
+        .entry((comment_type, oid.to_owned()))
+        .or_default()
+        .clone()
+}
+
 /// 每条动态每轮最多发起的评论请求总数（顶级与楼中楼共用预算）。
 const MAX_REPLY_REQUESTS_PER_ROUND: usize = 50;
 /// 动态发布后自动同步评论的时间窗口（天）
-const REPLY_SYNC_WINDOW_DAYS: i64 = 5;
+const REPLY_SYNC_WINDOW_DAYS: i64 = 30;
+/// 按发布年龄计算复查间隔，区间上界包含整 1 / 7 / 30 天。
+fn reply_refresh_interval(age: chrono::Duration) -> Option<chrono::Duration> {
+    if age <= chrono::Duration::days(1) {
+        Some(chrono::Duration::hours(1))
+    } else if age <= chrono::Duration::days(7) {
+        Some(chrono::Duration::hours(6))
+    } else if age <= chrono::Duration::days(30) {
+        Some(chrono::Duration::hours(24))
+    } else {
+        None
+    }
+}
+static PROFILE_CHECKED_AT: LazyLock<parking_lot::Mutex<HashMap<i64, Instant>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
 
 /// 确保全局 wbi 签名密钥已初始化，未初始化时立即获取（依赖视频任务的全局状态不可靠）
 pub async fn ensure_mixin_key(bili_client: &BiliClient, credential: &crate::bilibili::Credential) -> Result<()> {
@@ -130,7 +157,8 @@ pub async fn process_dynamic_source_queued(
         .one(connection)
         .await?
         .with_context(|| format!("dynamic source {source_id} no longer exists"))?;
-    process_dynamic_source_inner(source, bili_client, connection, config).await
+    process_dynamic_source_inner(source.clone(), bili_client, connection, config).await?;
+    update_upper_stat(&source, bili_client, connection, config).await
 }
 
 async fn process_dynamic_source_inner(
@@ -154,88 +182,155 @@ async fn process_dynamic_source_inner(
     );
     // 先落库新 AV 动态，使这一轮的视频统计也包含仅动态发布的新视频。
     refresh_dynamic_source(&source, bili_client, connection, config).await?;
-    set_sync_progress(
-        source.id,
-        SyncProgress {
-            source_name: source.upper_name.clone(),
-            phase: "账号快照".to_string(),
-            ..Default::default()
-        },
-    );
-    // 记录账号信息快照（粉丝/关注/投稿/播放/名字/签名），有变化才插入新记录
-    update_upper_stat(&source, bili_client, connection, config).await?;
-    set_sync_progress(
-        source.id,
-        SyncProgress {
-            source_name: source.upper_name.clone(),
-            phase: "评论同步".to_string(),
-            ..Default::default()
-        },
-    );
-    // 评论补拉：只对尚未完整扫描过的历史动态标记重扫，完整或关闭的评论区不反复补拉
-    backfill_missing_replies(&source, connection).await?;
-    process_unhandled_dynamics(&source, bili_client, connection, config).await?;
+    // 新动态与评论先处理；全量视频统计不能挡住评论队列。
+    process_source_replies(&source, bili_client, connection, config).await?;
     info!("处理动态源「{}」完成", source.upper_name);
     set_sync_progress(source.id, SyncProgress::default());
     Ok(())
 }
 
-/// 评论补拉：对已完成的动态，若 API 评论数 > 0 但本地无评论，自动标记重扫
-///
-/// 解决首次全量导入时 5 天窗口外历史动态评论被永久跳过的问题。
-/// 每轮限量检查，标记后由 process_unhandled_dynamics 按慢任务队列消化。
+/// 低优先级账号快照，完整处理所有源的视频与评论后再执行。
+pub async fn sample_dynamic_source(
+    source: &dynamic_source::Model,
+    bili_client: &BiliClient,
+    connection: &DatabaseConnection,
+    config: &Config,
+) -> Result<()> {
+    let lock = get_source_lock(source.id);
+    let Ok(_guard) = lock.try_lock() else { return Ok(()) };
+    let _progress_guard = SyncProgressGuard { source_id: source.id };
+    let profile_due = PROFILE_CHECKED_AT
+        .lock()
+        .get(&source.upper_id)
+        .is_none_or(|last| last.elapsed() >= std::time::Duration::from_secs(3600));
+    if profile_due {
+        set_sync_progress(
+            source.id,
+            SyncProgress {
+                source_name: source.upper_name.clone(),
+                phase: "账号快照".into(),
+                ..Default::default()
+            },
+        );
+        update_upper_stat(source, bili_client, connection, config).await?;
+        PROFILE_CHECKED_AT.lock().insert(source.upper_id, Instant::now());
+    }
+    Ok(())
+}
+
+/// 评论队列独立于视频下载调度，每轮结束一分钟后继续消化断点和缺口。
+/// 与定时/手动源同步共用源锁；失败保留断点，风控时停止整轮并退避。
+pub async fn reply_worker(connection: DatabaseConnection, bili_client: std::sync::Arc<BiliClient>) -> Result<()> {
+    loop {
+        let config = crate::config::VersionedConfig::get().snapshot();
+        let result = async {
+            config.check()?;
+            ensure_mixin_key(&bili_client, &config.credential).await?;
+            let sources = dynamic_source::Entity::find()
+                .filter(dynamic_source::Column::Enabled.eq(true))
+                .filter(dynamic_source::Column::SyncReply.eq(true))
+                .all(&connection)
+                .await?;
+            for source in sources {
+                let lock = get_source_lock(source.id);
+                let Ok(_guard) = lock.try_lock() else { continue };
+                let _progress_guard = SyncProgressGuard { source_id: source.id };
+                if let Err(error) = process_source_replies(&source, &bili_client, &connection, &config).await {
+                    if error
+                        .downcast_ref::<BiliError>()
+                        .is_some_and(|e| e.is_risk_control_related())
+                    {
+                        return Err(error);
+                    }
+                    warn!("评论队列「{}」处理失败，保留断点：{error:#}", source.upper_name);
+                }
+            }
+            Ok::<(), anyhow::Error>(())
+        }
+        .await;
+        let delay = match result {
+            Ok(()) => 60,
+            Err(error) => {
+                warn!("评论队列暂缓处理：{error:#}");
+                if error
+                    .downcast_ref::<BiliError>()
+                    .is_some_and(|e| e.is_risk_control_related())
+                {
+                    600
+                } else {
+                    60
+                }
+            }
+        };
+        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+    }
+}
+
+async fn process_source_replies(
+    source: &dynamic_source::Model,
+    bili_client: &BiliClient,
+    connection: &DatabaseConnection,
+    config: &Config,
+) -> Result<()> {
+    backfill_missing_replies(source, connection).await?;
+    process_unhandled_dynamics(source, bili_client, connection, config).await
+}
+
+/// 先筛出真实缺口再限量入队；近期动态按独立刷新周期入队，完整抓过也可发现新评论。
 async fn backfill_missing_replies(source: &dynamic_source::Model, connection: &DatabaseConnection) -> Result<()> {
-    /// 每轮最多检查的已完成动态数
-    const BACKFILL_CHECK_LIMIT: u64 = 50;
-    /// 每轮最多标记的待重扫动态数（与每轮处理上限对齐，避免积压无限膨胀）
-    const MAX_BACKFILL_MARK_PER_ROUND: usize = 5;
-    // 未开启评论同步的源不做补拉标记，避免白标记后又被直接清掉
     if !source.sync_reply {
         return Ok(());
     }
-    let mut candidates = dynamic::Entity::find()
-        .filter(dynamic::Column::SourceId.eq(source.id))
-        .filter(dynamic::Column::Valid.eq(true))
-        .filter(dynamic::Column::DownloadStatus.gte(STATUS_COMPLETED))
-        .filter(dynamic::Column::RescanReply.eq(false))
-        .filter(dynamic::Column::ReplySyncedAt.is_null())
-        .order_by_desc(dynamic::Column::PubTs)
+    let now = chrono::Utc::now();
+    let candidates = dynamic::Entity::find()
+        .from_raw_sql(Statement::from_sql_and_values(
+            connection.get_database_backend(),
+            "SELECT d.* FROM dynamic d WHERE d.source_id = ? AND d.valid = 1
+         AND d.download_status >= ? AND d.rescan_reply = 0
+         AND d.comment_type > 0 AND d.comment_oid <> ''
+         AND (
+            d.reply_sync_state IS NOT NULL
+            OR (d.pub_ts >= ? AND (d.reply_synced_at IS NULL OR
+                d.reply_synced_at <= CASE
+                    WHEN d.pub_ts >= ? THEN ?
+                    WHEN d.pub_ts >= ? THEN ?
+                    ELSE ? END))
+            OR (d.reply_synced_at IS NULL
+                AND CAST(json_extract(d.stat, '$.comment.count') AS INTEGER) >
+                    (SELECT COUNT(*) FROM reply r WHERE r.dynamic_id = d.id AND r.valid = 1))
+            OR EXISTS (SELECT 1 FROM video_stat vs WHERE vs.bvid = d.video_bvid
+                AND vs.id = (SELECT MAX(latest.id) FROM video_stat latest WHERE latest.bvid = d.video_bvid)
+                AND vs.recorded_at > d.reply_synced_at
+                AND vs.reply_count > (SELECT COUNT(*) FROM reply r WHERE r.dynamic_id = d.id AND r.valid = 1)
+                AND d.reply_synced_at <= ?)
+         )
+         ORDER BY d.reply_synced_at ASC, d.pub_ts DESC LIMIT 5",
+            [
+                source.id.into(),
+                (STATUS_COMPLETED as i64).into(),
+                (now - chrono::Duration::days(REPLY_SYNC_WINDOW_DAYS))
+                    .naive_utc()
+                    .into(),
+                (now - chrono::Duration::days(1)).naive_utc().into(),
+                (now - chrono::Duration::hours(1)).naive_utc().into(),
+                (now - chrono::Duration::days(7)).naive_utc().into(),
+                (now - chrono::Duration::hours(6)).naive_utc().into(),
+                (now - chrono::Duration::hours(24)).naive_utc().into(),
+                (now - chrono::Duration::hours(24)).naive_utc().into(),
+            ],
+        ))
         .all(connection)
         .await?;
-    candidates.truncate(BACKFILL_CHECK_LIMIT as usize);
-    let mut marked = 0;
-    for dyn_model in candidates {
-        if marked >= MAX_BACKFILL_MARK_PER_ROUND {
-            break;
-        }
-        // API 评论数（来自动态抓取时的 stat 快照）
-        let api_count = dyn_model
-            .stat
-            .as_ref()
-            .and_then(|s| s["comment"]["count"].as_i64())
-            .unwrap_or(0);
-        if api_count <= 0 {
-            continue;
-        }
-        // 本地已同步的评论数
-        let local_count = reply::Entity::find()
-            .filter(reply::Column::DynamicId.eq(&dyn_model.id))
-            .filter(reply::Column::Valid.eq(true))
-            .count(connection)
-            .await? as i64;
-        // 本地评论少于 API 评论数（含部分同步）时补拉
-        if local_count >= api_count {
-            continue;
-        }
-        let mut model: dynamic::ActiveModel = dyn_model.into();
+    for candidate in &candidates {
+        let mut model: dynamic::ActiveModel = candidate.clone().into();
         model.rescan_reply = Set(true);
         model.save(connection).await?;
-        marked += 1;
     }
-    if marked > 0 {
+    if !candidates.is_empty() {
         info!(
-            "「{}」评论补拉：标记 {} 条历史动态待重扫评论（每轮限量消化）",
-            source.upper_name, marked
+            "「{}」评论队列：加入 {} 条缺口补拉或定期复查任务",
+            source.upper_name,
+            candidates.len()
         );
     }
     Ok(())
@@ -504,8 +599,7 @@ async fn refresh_dynamic_source(
         if idx > 0 && info.pub_ts <= latest_row_at {
             break;
         }
-        create_dynamic(&info, source.id, connection).await?;
-        count += 1;
+        count += usize::from(create_dynamic(&info, source.id, connection).await?);
     }
     error?;
     if max_datetime != latest_row_at {
@@ -518,7 +612,7 @@ async fn refresh_dynamic_source(
 }
 
 /// 尝试创建 Dynamic Model，如果发生冲突则忽略
-async fn create_dynamic(info: &DynamicInfo, source_id: i32, connection: &DatabaseConnection) -> Result<()> {
+async fn create_dynamic(info: &DynamicInfo, source_id: i32, connection: &DatabaseConnection) -> Result<bool> {
     let model = dynamic::ActiveModel {
         id: Set(info.id.clone()),
         video_bvid: Set(info.raw["modules"]["module_dynamic"]["major"]["archive"]["bvid"]
@@ -540,12 +634,12 @@ async fn create_dynamic(info: &DynamicInfo, source_id: i32, connection: &Databas
         rescan_reply: Set(false),
         ..Default::default()
     };
-    dynamic::Entity::insert(model)
+    let inserted = dynamic::Entity::insert(model)
         .on_conflict(OnConflict::new().do_nothing().to_owned())
         .do_nothing()
         .exec(connection)
         .await?;
-    Ok(())
+    Ok(matches!(inserted, sea_orm::TryInsertResult::Inserted(_)))
 }
 
 /// 处理动态源下所有未完成的动态
@@ -660,8 +754,9 @@ fn select_dynamic_batch(
     });
     let remaining_rescan = rescan.len().saturating_sub(max_rescan);
     let remaining_new = new.len().saturating_sub(max_new);
-    let mut selected: Vec<_> = rescan.into_iter().take(max_rescan).collect();
-    selected.extend(new.into_iter().take(max_new));
+    // 首次处理的新动态先执行，历史大评论区的续抓不能挡住新内容。
+    let mut selected: Vec<_> = new.into_iter().take(max_new).collect();
+    selected.extend(rescan.into_iter().take(max_rescan));
     (selected, remaining_rescan, remaining_new)
 }
 
@@ -720,6 +815,8 @@ async fn process_dynamic(
     connection: &DatabaseConnection,
     config: &Config,
 ) -> Result<()> {
+    let lock = get_reply_lock(dyn_model.comment_type, &dyn_model.comment_oid);
+    let _reply_guard = lock.lock().await;
     // 目录格式 {path}/{YYYY-MM-DD} {dyn_id}
     let dir = PathBuf::from(&source.path).join(format!("{} {}", dyn_model.pub_ts.format("%Y-%m-%d"), dyn_model.id));
     fs::create_dir_all(&dir).await?;
@@ -758,11 +855,12 @@ async fn process_dynamic(
                 .await?;
         }
     }
-    // 同步评论：发布 5 天内的动态每轮自动同步，5 天外的仅在被手动标记重扫时同步
+    // 近期动态自动同步，历史动态只处理队列中显式标记的缺口/续抓。
     let within_window =
         dyn_model.pub_ts.and_utc() + chrono::Duration::days(REPLY_SYNC_WINDOW_DAYS) >= chrono::Utc::now();
     let need_rescan = dyn_model.rescan_reply;
     let mut synced_replies = false;
+    let mut reused_at = None;
     let mut replies_incomplete = false;
     if source.sync_reply && (within_window || need_rescan) {
         info!(
@@ -771,7 +869,7 @@ async fn process_dynamic(
             if need_rescan {
                 "（重扫）"
             } else {
-                "（5 天窗口内）"
+                "（自动同步窗口内）"
             }
         );
         let reply_sync_result = match sync_dynamic_replies(
@@ -817,9 +915,16 @@ async fn process_dynamic(
                 }
             }
         };
-        synced_replies = matches!(reply_sync_result, ReplySyncResult::Complete | ReplySyncResult::Skipped);
+        synced_replies = matches!(
+            reply_sync_result,
+            ReplySyncResult::Complete | ReplySyncResult::Reused(_) | ReplySyncResult::Skipped
+        );
         replies_incomplete = matches!(reply_sync_result, ReplySyncResult::Incomplete);
         match reply_sync_result {
+            ReplySyncResult::Reused(at) => {
+                reused_at = Some(at);
+                info!("动态 {} 复用同一评论区的完整同步结果", dyn_model.id);
+            }
             ReplySyncResult::Complete => info!("动态 {} 评论同步完整完成", dyn_model.id),
             ReplySyncResult::Incomplete => info!("动态 {} 评论本轮部分同步，已保存断点，下轮继续", dyn_model.id),
             ReplySyncResult::Skipped => info!("动态 {} 评论同步已跳过（缺少评论对象信息）", dyn_model.id),
@@ -833,7 +938,7 @@ async fn process_dynamic(
     model.rescan_reply = Set(replies_incomplete);
     if synced_replies {
         model.reply_sync_state = Set(None);
-        model.reply_synced_at = Set(Some(chrono::Utc::now().naive_utc()));
+        model.reply_synced_at = Set(Some(reused_at.unwrap_or_else(|| chrono::Utc::now().naive_utc())));
     }
     model.save(connection).await?;
     if replies_incomplete {
@@ -846,9 +951,48 @@ async fn process_dynamic(
 
 #[derive(Debug)]
 enum ReplySyncResult {
+    Reused(chrono::NaiveDateTime),
     Skipped,
     Complete,
     Incomplete,
+}
+
+/// 合作视频在不同动态下共用评论区。只复用比当前记录更新且仍在复查周期内的完整结果。
+/// 复用保留原始完成时间，避免多个动态互相复制后把刷新时间不断向后推。
+async fn reuse_shared_replies(
+    model: &dynamic::Model,
+    connection: &DatabaseConnection,
+) -> Result<Option<chrono::NaiveDateTime>> {
+    let now = chrono::Utc::now();
+    let interval = reply_refresh_interval(now - model.pub_ts.and_utc()).unwrap_or(chrono::Duration::hours(24));
+    let peer = dynamic::Entity::find()
+        .filter(dynamic::Column::Id.ne(&model.id))
+        .filter(dynamic::Column::Valid.eq(true))
+        .filter(dynamic::Column::CommentType.eq(model.comment_type))
+        .filter(dynamic::Column::CommentOid.eq(&model.comment_oid))
+        .filter(dynamic::Column::ReplySyncState.is_null())
+        .filter(dynamic::Column::ReplySyncedAt.gte((now - interval).naive_utc()))
+        .filter(dynamic::Column::ReplySyncedAt.gt(model.reply_synced_at.unwrap_or_default()))
+        .order_by_desc(dynamic::Column::ReplySyncedAt)
+        .one(connection)
+        .await?;
+    let Some(peer) = peer else { return Ok(None) };
+    let txn = connection.begin().await?;
+    // 完整结果覆盖有效状态；目标独有的旧评论只标失效，保留历史内容。
+    reply::Entity::update_many()
+        .filter(reply::Column::DynamicId.eq(&model.id))
+        .col_expr(reply::Column::Valid, Expr::value(false))
+        .exec(&txn)
+        .await?;
+    txn.execute(Statement::from_sql_and_values(connection.get_database_backend(),
+        "INSERT INTO reply (rpid, dynamic_id, parent_rpid, uname, avatar, content, images, ctime, raw, download_status, valid)
+         SELECT rpid, ?, parent_rpid, uname, avatar, content, images, ctime, raw, download_status, valid FROM reply WHERE dynamic_id = ?
+         ON CONFLICT(rpid, dynamic_id) DO UPDATE SET parent_rpid=excluded.parent_rpid, uname=excluded.uname,
+         avatar=excluded.avatar, content=excluded.content, images=excluded.images, ctime=excluded.ctime,
+         raw=excluded.raw, valid=excluded.valid",
+        [model.id.clone().into(), peer.id.into()])).await?;
+    txn.commit().await?;
+    Ok(peer.reply_synced_at)
 }
 
 /// 拉取动态的评论：存库、导出 JSON/Markdown、下载评论图片
@@ -868,6 +1012,41 @@ async fn sync_dynamic_replies(
         warn!("动态 {dynamic_id} 缺少评论信息（comment_type={comment_type}），跳过评论同步");
         return Ok(ReplySyncResult::Skipped);
     }
+    // 同一个评论区固定一个执行者，达到预算时也只由执行者续抓。
+    // 其余关联动态等待完整结果，再复制归档，避免热门合作视频重复扫描相同页面。
+    let owner = dynamic::Entity::find()
+        .from_raw_sql(Statement::from_sql_and_values(
+            connection.get_database_backend(),
+            "SELECT d.* FROM dynamic d LEFT JOIN dynamic_source s ON s.id = d.source_id
+         WHERE d.valid = 1 AND d.comment_type = ? AND d.comment_oid = ?
+         AND (d.id = ? OR s.id IS NULL OR (s.enabled = 1 AND s.sync_reply = 1))
+         ORDER BY d.id LIMIT 1",
+            [
+                comment_type.into(),
+                comment_oid.to_owned().into(),
+                dynamic_id.clone().into(),
+            ],
+        ))
+        .one(connection)
+        .await?;
+    let is_owner = owner.as_ref().is_none_or(|owner| owner.id == *dynamic_id);
+    if (!is_owner || dyn_model.reply_sync_state.is_none())
+        && let Some(at) = reuse_shared_replies(dyn_model, connection).await?
+    {
+        export_local_replies(dynamic_id, comments_dir, downloader, connection, config).await?;
+        return Ok(ReplySyncResult::Reused(at));
+    }
+    if let Some(owner) = owner.filter(|_| !is_owner) {
+        if owner.download_status >= STATUS_COMPLETED {
+            dynamic::Entity::update_many()
+                .filter(dynamic::Column::Id.eq(&owner.id))
+                .col_expr(dynamic::Column::RescanReply, Expr::value(true))
+                .exec(connection)
+                .await?;
+        }
+        info!("动态 {dynamic_id} 等待同一评论区的动态 {} 完成扫描，保留待办", owner.id);
+        return Ok(ReplySyncResult::Incomplete);
+    }
     let mut state: ReplySyncState = dyn_model
         .reply_sync_state
         .clone()
@@ -876,12 +1055,13 @@ async fn sync_dynamic_replies(
         .context("invalid saved reply pagination state")?
         .unwrap_or_default();
     if state.restart_legacy_pagination() {
-        info!("动态 {dynamic_id} 的旧分页游标需要重新初始化，保留本地历史评论，开始新的扫描周期");
+        info!("动态 {dynamic_id} 的旧扫描需要重新初始化，保留本地历史，开始新的扫描周期");
     }
     for _ in 0..MAX_REPLY_REQUESTS_PER_ROUND {
         if state.is_complete() {
             break;
         }
+        let _priority = crate::utils::task_priority::background_permit().await;
         let (replies, next_state) = reply_api
             .get_next_page(comment_type, comment_oid, &state)
             .await
@@ -899,6 +1079,21 @@ async fn sync_dynamic_replies(
             state.progress_description()
         );
     }
+    export_local_replies(dynamic_id, comments_dir, downloader, connection, config).await?;
+    Ok(if replies_complete {
+        ReplySyncResult::Complete
+    } else {
+        ReplySyncResult::Incomplete
+    })
+}
+
+async fn export_local_replies(
+    dynamic_id: &str,
+    comments_dir: &PathBuf,
+    downloader: &Downloader,
+    connection: &DatabaseConnection,
+    config: &Config,
+) -> Result<()> {
     // 从本地数据库导出完整历史，而不是用 B 站本轮返回结果覆盖历史评论。
     let local_replies = load_local_replies(dynamic_id, connection).await?;
     // 导出 JSON / Markdown
@@ -932,17 +1127,14 @@ async fn sync_dynamic_replies(
             if fs::try_exists(&path).await? {
                 return Ok(());
             }
+            let _priority = crate::utils::task_priority::background_permit().await;
             downloader.fetch(&url, &path, &config.concurrent_limit.download).await
         })
         .buffer_unordered(concurrency);
     while let Some(res) = image_stream.next().await {
         res?;
     }
-    Ok(if replies_complete {
-        ReplySyncResult::Complete
-    } else {
-        ReplySyncResult::Incomplete
-    })
+    Ok(())
 }
 
 /// 从本地数据库读取某条动态的全部评论历史，并重建评论树。
@@ -1200,7 +1392,7 @@ mod tests {
         assert_eq!(rescans_left, 3);
         assert_eq!(new_left, 2);
         assert_eq!(
-            batch.iter().take(3).map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            batch.iter().skip(20).take(3).map(|d| d.id.as_str()).collect::<Vec<_>>(),
             vec!["5", "6", "7"]
         );
         assert_eq!(batch.len(), 25);
@@ -1420,7 +1612,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn completion_and_closed_comments_are_not_automatically_requeued() -> Result<()> {
+    async fn fresh_completed_comments_are_not_immediately_requeued() -> Result<()> {
         let db = test_database().await?;
         let model = insert_dynamic(&db, "completed").await?;
         let mut active: dynamic::ActiveModel = model.into();
@@ -1445,6 +1637,180 @@ mod tests {
                 .unwrap()
                 .rescan_reply
         );
+        Ok(())
+    }
+
+    fn source() -> dynamic_source::Model {
+        dynamic_source::Model {
+            id: 1,
+            upper_id: 1,
+            upper_name: "test".into(),
+            path: String::new(),
+            sync_reply: true,
+            enabled: true,
+            created_at: chrono::Utc::now().naive_utc(),
+            latest_dyn_at: chrono::Utc::now().naive_utc(),
+        }
+    }
+
+    #[test]
+    fn refresh_schedule_includes_exact_day_boundaries() {
+        for (age, hours) in [
+            (chrono::Duration::hours(0), Some(1)),
+            (chrono::Duration::days(1), Some(1)),
+            (chrono::Duration::days(1) + chrono::Duration::seconds(1), Some(6)),
+            (chrono::Duration::days(7), Some(6)),
+            (chrono::Duration::days(7) + chrono::Duration::seconds(1), Some(24)),
+            (chrono::Duration::days(30), Some(24)),
+            (chrono::Duration::days(30) + chrono::Duration::seconds(1), None),
+        ] {
+            assert_eq!(reply_refresh_interval(age).map(|v| v.num_hours()), hours);
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_queue_uses_age_intervals_and_respects_disabled_sources() -> Result<()> {
+        let db = test_database().await?;
+        let now = chrono::Utc::now();
+        for (id, age_hours, since_hours, due) in [
+            ("first-day-due", 12, 2, true),
+            ("first-day-fresh", 12, 0, false),
+            ("first-week-due", 48, 7, true),
+            ("first-week-fresh", 48, 2, false),
+            ("first-month-due", 240, 25, true),
+            ("first-month-fresh", 240, 7, false),
+            ("old-complete", 960, 25, false),
+        ] {
+            let mut model: dynamic::ActiveModel = insert_dynamic(&db, id).await?.into();
+            model.pub_ts = Set((now - chrono::Duration::hours(age_hours)).naive_utc());
+            model.reply_synced_at = Set(Some((now - chrono::Duration::hours(since_hours)).naive_utc()));
+            model.rescan_reply = Set(false);
+            model.save(&db).await?;
+            assert_eq!(due, id.ends_with("due"));
+        }
+        let mut disabled = source();
+        disabled.sync_reply = false;
+        backfill_missing_replies(&disabled, &db).await?;
+        assert_eq!(
+            dynamic::Entity::find()
+                .filter(dynamic::Column::RescanReply.eq(true))
+                .count(&db)
+                .await?,
+            0
+        );
+        backfill_missing_replies(&source(), &db).await?;
+        let queued = dynamic::Entity::find()
+            .filter(dynamic::Column::RescanReply.eq(true))
+            .all(&db)
+            .await?;
+        assert_eq!(queued.len(), 3);
+        assert!(queued.iter().all(|d| d.id.ends_with("due")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn historical_gap_after_seventy_six_satisfied_rows_is_selected() -> Result<()> {
+        let db = test_database().await?;
+        for n in 0..80 {
+            let mut model: dynamic::ActiveModel = insert_dynamic(&db, &format!("history-{n}")).await?.into();
+            model.pub_ts = Set((chrono::Utc::now() - chrono::Duration::days(60 + n)).naive_utc());
+            model.stat = Set(Some(json!({"comment":{"count":if n == 76 { 46 } else { 0 }}})));
+            model.rescan_reply = Set(false);
+            model.save(&db).await?;
+        }
+        backfill_missing_replies(&source(), &db).await?;
+        let queued = dynamic::Entity::find()
+            .filter(dynamic::Column::RescanReply.eq(true))
+            .all(&db)
+            .await?;
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].id, "history-76");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_video_reuses_full_scan_without_extending_refresh_time() -> Result<()> {
+        let db = test_database().await?;
+        let first = insert_dynamic(&db, "shared-first").await?;
+        let second = insert_dynamic(&db, "shared-second").await?;
+        let (endpoint, queries, server) = mock_api(vec![main_response(42, true, "", 0)]).await?;
+        let client = BiliClient::new();
+        let credential = Credential::default();
+        let api = Reply::for_test(&client, &credential, endpoint);
+        let dir = TestDirectory::new();
+        let mut src = source();
+        src.path = dir.0.to_string_lossy().into();
+        let downloader = Downloader::new(client.client.clone());
+        let config = Config::default();
+        process_dynamic(&src, first, &downloader, &api, &db, &config).await?;
+        process_dynamic(&src, second, &downloader, &api, &db, &config).await?;
+        assert_eq!(queries.lock().unwrap().len(), 1);
+        let first = dynamic::Entity::find_by_id("shared-first").one(&db).await?.unwrap();
+        let second = dynamic::Entity::find_by_id("shared-second").one(&db).await?.unwrap();
+        assert_eq!(first.reply_synced_at, second.reply_synced_at);
+        assert!(
+            reply::Entity::find_by_id((42, first.id.clone()))
+                .one(&db)
+                .await?
+                .is_some()
+        );
+        assert!(
+            reply::Entity::find_by_id((42, second.id.clone()))
+                .one(&db)
+                .await?
+                .is_some()
+        );
+        assert_eq!(load_local_replies(&second.id, &db).await?.len(), 1);
+        // 更新一份副本的有效状态不会把另一个账号的历史清掉。
+        reconcile_replies(&first.id, &[], &db).await?;
+        assert!(
+            reply::Entity::find_by_id((42, second.id))
+                .one(&db)
+                .await?
+                .unwrap()
+                .valid
+        );
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_video_with_large_comment_section_has_only_one_pagination_checkpoint() -> Result<()> {
+        let db = test_database().await?;
+        insert_dynamic(&db, "a-owner").await?;
+        insert_dynamic(&db, "b-peer").await?;
+        let pages = (1..=51)
+            .map(|n| main_response(n, n == 51, &format!("next-{n}"), 0))
+            .collect();
+        let (endpoint, queries, server) = mock_api(pages).await?;
+        let client = BiliClient::new();
+        let credential = Credential::default();
+        let api = Reply::for_test(&client, &credential, endpoint);
+        let dir = TestDirectory::new();
+        let mut src = source();
+        src.path = dir.0.to_string_lossy().into();
+        let downloader = Downloader::new(client.client.clone());
+        let config = Config::default();
+        for id in ["a-owner", "b-peer", "a-owner", "b-peer"] {
+            let model = dynamic::Entity::find_by_id(id).one(&db).await?.unwrap();
+            process_dynamic(&src, model, &downloader, &api, &db, &config).await?;
+            if id == "b-peer" && queries.lock().unwrap().len() == 50 {
+                assert!(
+                    dynamic::Entity::find_by_id(id)
+                        .one(&db)
+                        .await?
+                        .unwrap()
+                        .reply_sync_state
+                        .is_none()
+                );
+            }
+        }
+        assert_eq!(queries.lock().unwrap().len(), 51);
+        for id in ["a-owner", "b-peer"] {
+            assert_eq!(load_local_replies(id, &db).await?.len(), 51);
+            assert!(!dynamic::Entity::find_by_id(id).one(&db).await?.unwrap().rescan_reply);
+        }
+        server.abort();
         Ok(())
     }
 
