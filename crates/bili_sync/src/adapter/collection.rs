@@ -55,20 +55,7 @@ impl VideoSource for collection::Model {
         true
     }
 
-    fn should_filter(
-        &self,
-        _idx: usize,
-        video_info: Result<VideoInfo, anyhow::Error>,
-        latest_row_at: &chrono::DateTime<Utc>,
-    ) -> Option<VideoInfo> {
-        // 由于 collection 的视频无固定时间顺序，should_take 无法提前中断拉取，因此 should_filter 环节需要进行额外过滤
-        if let Ok(video_info) = video_info
-            && video_info.release_datetime() > latest_row_at
-        {
-            return Some(video_info);
-        }
-        None
-    }
+    // 合集可以随时加入旧投稿。原发布时间不能判断成员是否新增，交由入库唯一索引去重。
 
     fn rule(&self) -> &Option<Rule> {
         &self.rule

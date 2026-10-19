@@ -303,7 +303,7 @@ pub async fn fetch_video_details(
 ) -> Result<()> {
     video_source.log_fetch_video_start();
     let videos_model = filter_unfilled_videos(video_source.filter_expr(), connection).await?;
-    let mut tasks = stream::iter(videos_model)
+    let tasks = stream::iter(videos_model)
         .map(|video_model| async move {
             let video = Video::new(bili_client, video_model.bvid.as_str(), &config.credential);
             let info: Result<_> = async { Ok((video.get_tags().await?, video.get_view_info().await?)) }.await;
@@ -316,9 +316,14 @@ pub async fn fetch_video_details(
                     if let Some(inner) = e.downcast_ref::<BiliError>()
                         && inner.is_video_unavailable()
                     {
-                        Some(VideoDetailUpdate::Unavailable(video_model.bvid, inner.clone()))
+                        Ok(Some(VideoDetailUpdate::Unavailable(video_model.bvid, inner.clone())))
+                    } else if e
+                        .downcast_ref::<BiliError>()
+                        .is_some_and(BiliError::is_risk_control_related)
+                    {
+                        Err(e)
                     } else {
-                        None
+                        Ok(None)
                     }
                 }
                 Ok((tags, mut view_info)) => {
@@ -338,14 +343,31 @@ pub async fn fetch_video_details(
                     video_active_model.single_page = Set(Some(pages.len() == 1));
                     video_active_model.tags = Set(Some(tags.into()));
                     video_active_model.should_download = Set(video_source.rule().evaluate(&video_active_model, &pages));
-                    Some(VideoDetailUpdate::Detail(pages, video_active_model, stat))
+                    Ok(Some(VideoDetailUpdate::Detail(pages, video_active_model, stat)))
                 }
             }
         })
-        .buffer_unordered(config.concurrent_limit.video)
-        .filter_map(futures::future::ready)
-        .chunks(15);
-    while let Some(details) = tasks.next().await {
+        .buffer_unordered(config.concurrent_limit.video);
+    save_video_details(tasks, connection).await?;
+    video_source.log_fetch_video_end();
+    Ok(())
+}
+
+/// 风控立即停止消费后续详情，但先保存已获取的部分批次，保留下一轮可继续的进度。
+async fn save_video_details(
+    tasks: impl Stream<Item = Result<Option<VideoDetailUpdate>>>,
+    connection: &DatabaseConnection,
+) -> Result<()> {
+    let tasks = tasks
+        .filter_map(|result| futures::future::ready(result.transpose()))
+        .try_chunks(15);
+    tokio::pin!(tasks);
+    while let Some(result) = tasks.next().await {
+        // try_chunks 在错误时返回此前的部分批次及原错误，不再消费下一项。
+        let (details, stopped_error) = match result {
+            Ok(details) => (details, None),
+            Err(error) => (error.0, Some(error.1)),
+        };
         let mut unavailable_videos = Vec::new();
         let mut pages = Vec::new();
         let mut videos = Vec::new();
@@ -368,8 +390,10 @@ pub async fn fetch_video_details(
             video_stat::Entity::insert_many(stats).exec(&txn).await?;
         }
         txn.commit().await?;
+        if let Some(error) = stopped_error {
+            return Err(error);
+        }
     }
-    video_source.log_fetch_video_end();
     Ok(())
 }
 
@@ -689,6 +713,10 @@ pub async fn dispatch_download_page(
                     {
                         risk_control_related_error = Some(e.clone());
                     }
+                    // 路径解析等前置失败尚未返回页状态，也必须阻止父视频假完成。
+                    // 保留可重试状态，待路径或文件系统问题解决后继续处理该页。
+                    target_status = 0;
+                    error!("处理视频「{}」分页失败，保留重试：{e:#}", video_model.name);
                 }
             }
             // 仅在发生风控时终止流，其它情况继续执行
@@ -1111,4 +1139,228 @@ async fn generate_nfo(nfo: NFO<'_>, nfo_path: PathBuf) -> Result<()> {
     }
     fs::write(nfo_path, nfo.generate_nfo().await?.as_bytes()).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use bili_sync_migration::{Migrator, MigratorTrait};
+    use chrono::{TimeZone, Utc};
+    use sea_orm::{Database, IntoActiveModel, PaginatorTrait};
+
+    use super::*;
+
+    async fn source_database() -> Result<(DatabaseConnection, VideoSourceEnum)> {
+        let connection = Database::connect("sqlite::memory:").await?;
+        Migrator::up(&connection, None).await?;
+        let source = collection::ActiveModel {
+            s_id: Set(1),
+            m_id: Set(1),
+            name: Set("test collection".into()),
+            r#type: Set(2),
+            path: Set("/unused".into()),
+            latest_row_at: Set(Utc.timestamp_opt(0, 0).unwrap().naive_utc()),
+            enabled: Set(true),
+            ..Default::default()
+        }
+        .insert(&connection)
+        .await?;
+        Ok((connection, source.into()))
+    }
+
+    fn collection_video(bvid: &str, timestamp: i64) -> VideoInfo {
+        VideoInfo::Collection {
+            bvid: bvid.into(),
+            cover: String::new(),
+            ctime: Utc.timestamp_opt(timestamp, 0).unwrap(),
+            pubtime: Utc.timestamp_opt(timestamp, 0).unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn collection_discovers_old_videos_added_after_the_first_sync_without_duplicates() -> Result<()> {
+        let (connection, source) = source_database().await?;
+        refresh_video_source(
+            &source,
+            Box::pin(stream::iter([Ok(collection_video("BVnew", 1_750_000_000))])),
+            &connection,
+        )
+        .await?;
+        let source: VideoSourceEnum = collection::Entity::find_by_id(1)
+            .one(&connection)
+            .await?
+            .unwrap()
+            .into();
+        for _ in 0..2 {
+            refresh_video_source(
+                &source,
+                Box::pin(stream::iter([
+                    Ok(collection_video("BVnew", 1_750_000_000)),
+                    Ok(collection_video("BVold", 1_600_000_000)),
+                ])),
+                &connection,
+            )
+            .await?;
+        }
+        assert_eq!(video::Entity::find().count(&connection).await?, 2);
+        assert!(
+            video::Entity::find()
+                .filter(video::Column::Bvid.eq("BVold"))
+                .one(&connection)
+                .await?
+                .is_some()
+        );
+        assert_eq!(
+            collection::Entity::find_by_id(1)
+                .one(&connection)
+                .await?
+                .unwrap()
+                .latest_row_at,
+            Utc.timestamp_opt(1_750_000_000, 0).unwrap().naive_utc()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn page_path_failure_keeps_parent_pending_and_can_retry_after_path_is_repaired() -> Result<()> {
+        let (connection, source) = source_database().await?;
+        create_videos(vec![collection_video("BVretry", 1_750_000_000)], &source, &connection).await?;
+        let mut video = video::Entity::find()
+            .one(&connection)
+            .await?
+            .unwrap()
+            .into_active_model();
+        video.single_page = Set(Some(true));
+        video.should_download = Set(true);
+        video.download_status = Set(VideoStatus::from([7, 7, 7, 7, 0]).into());
+        let mut video = video.update(&connection).await?;
+        let mut page = page::Model {
+            video_id: video.id,
+            cid: 123,
+            pid: 1,
+            path: Some(
+                std::env::temp_dir()
+                    .join(format!("bili-sync-missing-{}/video.mp4", uuid::Uuid::new_v4()))
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            download_status: 0,
+            ..Default::default()
+        }
+        .into_active_model();
+        page.id = sea_orm::ActiveValue::NotSet;
+        let page = page.insert(&connection).await?;
+        let client = BiliClient::new();
+        let downloader = Downloader::new(client.client.clone());
+        let template = handlebars::Handlebars::new();
+        let config = Config::default();
+        let context = DownloadContext::new(
+            &client,
+            &source,
+            &template,
+            &connection,
+            &downloader,
+            &config,
+            &config.filter_option,
+        );
+        let result = dispatch_download_page(true, &video, vec![page.clone()], Path::new("/unused"), context).await?;
+        let mut status = VideoStatus::from(video.download_status);
+        status.update_status(&[
+            ExecutionStatus::Skipped,
+            ExecutionStatus::Skipped,
+            ExecutionStatus::Skipped,
+            ExecutionStatus::Skipped,
+            result,
+        ]);
+        assert!(!status.get_completed());
+        let mut pending = video.clone().into_active_model();
+        pending.download_status = Set(status.into());
+        video = pending.update(&connection).await?;
+        assert_eq!(
+            filter_unhandled_video_pages(source.filter_expr(), &connection)
+                .await?
+                .len(),
+            1
+        );
+        // After repairing the path, model successful child downloads to verify that the
+        // parent aggregation can recover. The test never requests real media.
+        let mut repaired = page.into_active_model();
+        repaired.path = Set(Some(
+            std::env::temp_dir()
+                .join("bili-sync-retry.mp4")
+                .to_string_lossy()
+                .into_owned(),
+        ));
+        repaired.download_status = Set(PageStatus::from([7; 5]).into());
+        let repaired = repaired.update(&connection).await?;
+        let result = dispatch_download_page(true, &video, vec![repaired], Path::new("/unused"), context).await?;
+        status.update_status(&[
+            ExecutionStatus::Skipped,
+            ExecutionStatus::Skipped,
+            ExecutionStatus::Skipped,
+            ExecutionStatus::Skipped,
+            result,
+        ]);
+        assert!(status.get_completed());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detail_risk_control_saves_partial_batch_then_stops_before_the_next_result() -> Result<()> {
+        let (connection, source) = source_database().await?;
+        create_videos(
+            vec![
+                collection_video("BVfilled", 1_750_000_000),
+                collection_video("BVinvisible", 1_750_000_000),
+            ],
+            &source,
+            &connection,
+        )
+        .await?;
+        let mut filled = video::Entity::find()
+            .filter(video::Column::Bvid.eq("BVfilled"))
+            .one(&connection)
+            .await?
+            .unwrap()
+            .into_active_model();
+        filled.name = Set("filled before risk control".into());
+        filled.single_page = Set(Some(true));
+        let polled = AtomicUsize::new(0);
+        let tasks = stream::iter([
+            Ok(Some(VideoDetailUpdate::Detail(Vec::new(), filled, None))),
+            Ok(Some(VideoDetailUpdate::Unavailable(
+                "BVinvisible".into(),
+                BiliError::ErrorResponse {
+                    code: 62002,
+                    message: None,
+                    response: "{}".into(),
+                },
+            ))),
+            Err(anyhow!(BiliError::RiskControlOccurred("stop".into()))),
+            Ok(None),
+        ])
+        .inspect(|_| {
+            polled.fetch_add(1, Ordering::SeqCst);
+        });
+        let error = save_video_details(tasks, &connection).await.unwrap_err();
+        assert!(error.downcast_ref::<BiliError>().unwrap().is_risk_control_related());
+        assert_eq!(polled.load(Ordering::SeqCst), 3);
+        let filled = video::Entity::find()
+            .filter(video::Column::Bvid.eq("BVfilled"))
+            .one(&connection)
+            .await?
+            .unwrap();
+        assert_eq!(filled.name, "filled before risk control");
+        assert_eq!(filled.single_page, Some(true));
+        assert!(
+            !video::Entity::find()
+                .filter(video::Column::Bvid.eq("BVinvisible"))
+                .one(&connection)
+                .await?
+                .unwrap()
+                .valid
+        );
+        Ok(())
+    }
 }
