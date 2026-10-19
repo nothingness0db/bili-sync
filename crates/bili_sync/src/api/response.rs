@@ -34,6 +34,7 @@ pub struct DynamicStatsResponse {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatPoint {
+    #[serde(serialize_with = "serialize_utc")]
     pub recorded_at: DateTime,
     pub fan_count: i64,
     pub follow_count: i64,
@@ -52,7 +53,9 @@ pub struct UpperVersion {
     pub name: String,
     pub sign: String,
     pub face: String,
+    #[serde(serialize_with = "serialize_utc")]
     pub start_at: DateTime,
+    #[serde(serialize_with = "serialize_optional_utc")]
     pub end_at: Option<DateTime>,
 }
 
@@ -62,6 +65,7 @@ pub struct DynamicListItem {
     pub id: String,
     pub dyn_type: String,
     pub content: String,
+    #[serde(serialize_with = "serialize_utc")]
     pub pub_ts: DateTime,
     pub comment_count: i64,
     /// 本地已同步的评论数
@@ -71,6 +75,7 @@ pub struct DynamicListItem {
     pub valid: bool,
     /// 是否已有分页断点（区分首次重扫与断点续抓）
     pub reply_sync_started: bool,
+    #[serde(serialize_with = "serialize_optional_utc")]
     pub reply_synced_at: Option<DateTime>,
 }
 
@@ -89,6 +94,7 @@ pub struct DynamicDetailResponse {
     pub content: String,
     pub pics: Vec<String>,
     pub stat: serde_json::Value,
+    #[serde(serialize_with = "serialize_utc")]
     pub pub_ts: DateTime,
     pub location: String,
     pub path: String,
@@ -105,6 +111,7 @@ pub struct ReplyItem {
     pub avatar: String,
     pub content: String,
     pub images: Vec<String>,
+    #[serde(serialize_with = "serialize_utc")]
     pub ctime: DateTime,
     /// B 站已失效但仍保留在本地的历史评论
     pub valid: bool,
@@ -120,6 +127,7 @@ pub struct DynamicSourceDetail {
     pub path: String,
     pub sync_reply: bool,
     pub enabled: bool,
+    #[serde(serialize_with = "serialize_optional_utc")]
     pub latest_dyn_at: Option<DateTime>,
     #[serde(default)]
     pub dynamic_count: i64,
@@ -205,6 +213,10 @@ pub struct VideoInfo {
     pub favorite_id: Option<i32>,
     pub submission_id: Option<i32>,
     pub watch_later_id: Option<i32>,
+}
+
+fn serialize_utc<S: serde::Serializer>(value: &DateTime, serializer: S) -> Result<S::Ok, S::Error> {
+    value.and_utc().serialize(serializer)
 }
 
 fn serialize_optional_utc<S: serde::Serializer>(value: &Option<DateTime>, serializer: S) -> Result<S::Ok, S::Error> {
@@ -403,6 +415,7 @@ pub struct VideoSourceDetail {
     #[serde(default)]
     pub use_dynamic_api: Option<bool>,
     pub enabled: bool,
+    #[serde(serialize_with = "serialize_optional_utc")]
     pub latest_row_at: Option<DateTime>,
 }
 
@@ -420,4 +433,101 @@ pub type PollQrcodeResponse = PollStatus;
 pub struct FullSyncVideoSourceResponse {
     pub removed_count: usize,
     pub warnings: Option<Vec<String>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn dynamic_api_timestamps_preserve_utc_instants() {
+        let utc = Utc.with_ymd_and_hms(2026, 10, 20, 3, 4, 5).unwrap();
+        let time = utc.naive_utc();
+        let stats = DynamicStatsResponse {
+            upper_name: "test".into(),
+            upper_id: 1,
+            stats: vec![StatPoint {
+                recorded_at: time,
+                fan_count: 1,
+                follow_count: 2,
+                video_count: 3,
+                dynamic_video_count: 4,
+                total_video_count: 7,
+                view_count: 8,
+                like_count: 9,
+            }],
+            versions: vec![UpperVersion {
+                name: "test".into(),
+                sign: String::new(),
+                face: String::new(),
+                start_at: time,
+                end_at: Some(time),
+            }],
+        };
+        let list = DynamicListItem {
+            id: "1".into(),
+            dyn_type: "video".into(),
+            content: String::new(),
+            pub_ts: time,
+            comment_count: 1,
+            reply_count: 0,
+            rescan_reply: false,
+            path: String::new(),
+            valid: true,
+            reply_sync_started: false,
+            reply_synced_at: Some(time),
+        };
+        let detail = DynamicDetailResponse {
+            id: "1".into(),
+            dyn_type: "video".into(),
+            content: String::new(),
+            pics: vec![],
+            stat: serde_json::json!({}),
+            pub_ts: time,
+            location: String::new(),
+            path: String::new(),
+            replies: vec![ReplyItem {
+                rpid: 1,
+                parent_rpid: None,
+                uname: "test".into(),
+                avatar: String::new(),
+                content: String::new(),
+                images: vec![],
+                ctime: time,
+                valid: true,
+                sub_replies: vec![],
+            }],
+        };
+        let stats = serde_json::to_value(stats).unwrap();
+        let list = serde_json::to_value(list).unwrap();
+        let detail = serde_json::to_value(detail).unwrap();
+        for value in [
+            &stats["stats"][0]["recordedAt"],
+            &stats["versions"][0]["startAt"],
+            &stats["versions"][0]["endAt"],
+            &list["pubTs"],
+            &list["replySyncedAt"],
+            &detail["pubTs"],
+            &detail["replies"][0]["ctime"],
+        ] {
+            let parsed = chrono::DateTime::parse_from_rfc3339(value.as_str().unwrap()).unwrap();
+            assert_eq!(parsed.with_timezone(&Utc), utc);
+            assert_eq!(
+                parsed
+                    .with_timezone(&chrono::FixedOffset::east_opt(8 * 3600).unwrap())
+                    .format("%H:%M")
+                    .to_string(),
+                "11:04"
+            );
+        }
+        let absent = UpperVersion {
+            name: String::new(),
+            sign: String::new(),
+            face: String::new(),
+            start_at: time,
+            end_at: None,
+        };
+        assert!(serde_json::to_value(absent).unwrap()["endAt"].is_null());
+    }
 }
