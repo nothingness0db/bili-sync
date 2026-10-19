@@ -173,7 +173,8 @@ pub fn snapshot_from_info(info: &VideoInfo, recorded_at: DateTime<Utc>) -> Optio
     })
 }
 
-/// 跨源复用最近一小时的详情；返回 Some(false) 表示确认删除，None 表示无法确认或仍在不可见暂停期。
+/// 跨源复用最近一小时的详情；Some(false) 表示当前明确不可用，None 表示请求失败、无法确认。
+/// 不可见视频暂停期间不计入当前可见视频数，但仍保留到期后的恢复检查。
 /// 明确不可用时顺带标记本地视频失效，不写伪造的快照；风控立即向上抛出终止本轮。
 pub async fn sample_video(
     bvid: &str,
@@ -185,8 +186,7 @@ pub async fn sample_video(
 ) -> Result<Option<bool>> {
     let _guard = SAMPLE_LOCK.lock().await;
     match sample_decision(bvid, Utc::now(), db).await? {
-        SampleDecision::Deleted => return Ok(Some(false)),
-        SampleDecision::Invisible => return Ok(None),
+        SampleDecision::Deleted | SampleDecision::Invisible => return Ok(Some(false)),
         SampleDecision::Fetch => {}
     }
     if video_stat::Entity::find()
@@ -231,15 +231,15 @@ async fn save_sample_result(
         Err(e) if matches!(e.downcast_ref::<BiliError>(), Some(inner) if inner.is_risk_control_related()) => Err(e),
         Err(e) if matches!(e.downcast_ref::<BiliError>(), Some(inner) if inner.is_video_unavailable()) => {
             let error = e.downcast_ref::<BiliError>().unwrap();
-            let deleted = error.is_video_not_found();
             let changed = record_video_unavailable(bvid, error, db).await?;
             if changed > 0 {
                 info!("视频 {} 当前不可用，标记失效，保留本地文件和历史统计：{:#}", bvid, e);
             } else {
                 debug!("视频 {} 仍不可用，保留本地文件和历史统计：{:#}", bvid, e);
             }
-            // 不可见不代表已删除，账号视频计数仍需跳过这轮快照。
-            Ok(if deleted { Some(false) } else { None })
+            // 已删除或明确不可见均不计入当前可见视频数，不能让失效稿件挡住账号快照。
+            // 是否永久停止复查由 availability 中的 retry_at 决定，不在这里混为请求失败。
+            Ok(Some(false))
         }
         Err(e) => {
             warn!("采样视频 {} 统计失败，跳过：{:#}", bvid, e);
@@ -419,9 +419,9 @@ mod tests {
         assert!(save_sample_result(bvid, error(-403), &db).await.is_err());
         assert!(video::Entity::find().all(&db).await?.iter().all(|v| v.valid));
 
-        // 不可见顺带进入失效筛选，但不伪造删除时间或账号视频计数。
+        // 明确不可见不计入当前视频数，但不伪造永久删除时间。
         for _ in 0..2 {
-            assert_eq!(save_sample_result(bvid, error(62002), &db).await?, None);
+            assert_eq!(save_sample_result(bvid, error(62002), &db).await?, Some(false));
             let rows = video::Entity::find()
                 .filter(video::Column::Bvid.eq(bvid))
                 .all(&db)
@@ -440,14 +440,14 @@ mod tests {
         // 暂停状态优先于旧快照，不发网络请求，跨视频源也生效。
         assert_eq!(
             sample_video(bvid, Utc::now(), &BiliClient::new(), &Credential::default(), &db, false).await?,
-            None
+            Some(false)
         );
         // 后续确认已删除时，即使此前失效也补记时间，重复检测保留最初时间。
         assert_eq!(save_sample_result(bvid, error(-404), &db).await?, Some(false));
         let deleted_at = video::Entity::find_by_id(1).one(&db).await?.unwrap().deleted_at;
         assert!(deleted_at.is_some());
         assert_eq!(save_sample_result(bvid, error(62012), &db).await?, Some(false));
-        assert_eq!(save_sample_result(bvid, error(62002), &db).await?, None);
+        assert_eq!(save_sample_result(bvid, error(62002), &db).await?, Some(false));
         assert_eq!(
             sample_decision(bvid, Utc::now() + chrono::Duration::days(365), &db).await?,
             SampleDecision::Deleted
@@ -521,6 +521,34 @@ mod tests {
             message: None,
             response: "{}".into(),
         };
+        // 历史动态中的失效稿件可能根本没有下载记录，仍应明确排除当前账号计数。
+        record_video_unavailable("BV1invisible-dynamic", &invisible, &db).await?;
+        assert_eq!(
+            sample_video(
+                "BV1invisible-dynamic",
+                Utc::now(),
+                &BiliClient::new(),
+                &Credential::default(),
+                &db,
+                false
+            )
+            .await?,
+            Some(false)
+        );
+        let paused = video_availability::Entity::find_by_id("BV1invisible-dynamic")
+            .one(&db)
+            .await?
+            .unwrap();
+        assert_eq!(paused.error_code, 62002);
+        assert_eq!(
+            paused.retry_at.unwrap() - paused.checked_at,
+            chrono::Duration::hours(24)
+        );
+        assert_eq!(
+            sample_decision("BV1invisible-dynamic", paused.retry_at.unwrap().and_utc(), &db).await?,
+            SampleDecision::Fetch
+        );
+        assert_eq!(video::Entity::find().count(&db).await?, 1);
         record_video_unavailable(bvid, &invisible, &db).await?;
         let mut recovered = detail(json!({"view": 42}));
         if let VideoInfo::Detail {

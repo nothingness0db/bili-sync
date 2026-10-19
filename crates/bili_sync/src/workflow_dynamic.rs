@@ -385,7 +385,8 @@ async fn collect_dynamic_video_count(
         .await?;
     info!("开始采样「{}」的 {} 个视频统计..", source.upper_name, bvids.len());
     let mut count = 0i64;
-    let mut incomplete_count = false;
+    let mut unconfirmed_bvids = Vec::new();
+    let mut unavailable_bvids = Vec::new();
     for (idx, bvid) in bvids.iter().enumerate() {
         set_sync_progress(
             source.id,
@@ -409,12 +410,24 @@ async fn collect_dynamic_video_count(
         if dynamic_bvids.contains(bvid) && !current_bvids.contains(bvid) {
             match exists {
                 Some(true) => count += 1,
-                None => incomplete_count = true,
-                Some(false) => {}
+                None => unconfirmed_bvids.push(bvid.as_str()),
+                Some(false) => unavailable_bvids.push(bvid.as_str()),
             }
         }
     }
-    anyhow::ensure!(!incomplete_count, "部分动态视频状态未能确认，跳过账号计数快照");
+    anyhow::ensure!(
+        unconfirmed_bvids.is_empty(),
+        "动态视频详情请求失败，跳过账号计数快照：{}",
+        unconfirmed_bvids.join(", ")
+    );
+    if !unavailable_bvids.is_empty() {
+        info!(
+            "「{}」账号计数排除 {} 个已删除或不可见的动态视频，保留本地历史：{}",
+            source.upper_name,
+            unavailable_bvids.len(),
+            unavailable_bvids.join(", ")
+        );
+    }
     info!("采样「{}」视频统计完成", source.upper_name);
     Ok(count)
 }
