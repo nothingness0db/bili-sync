@@ -9,14 +9,18 @@
 	import api from '$lib/api';
 	import { Checkbox } from '$lib/components/ui/checkbox/index.js';
 	import { Label } from '$lib/components/ui/label/index.js';
-	import type {
-		VideosResponse,
-		VideoSourcesResponse,
-		ApiError,
-		VideoSource,
-		UpdateFilteredVideoStatusRequest,
-		VideoInfo
-	} from '$lib/types';
+import type {
+	VideosResponse,
+	VideoSourcesResponse,
+	ApiError,
+	VideoSource,
+	UpdateFilteredVideoStatusRequest,
+	VideoInfo,
+	AutoDeleteScanPolicy,
+	Config
+} from '$lib/types';
+import { Switch } from '$lib/components/ui/switch/index.js';
+import AlarmClockCheckIcon from '@lucide/svelte/icons/alarm-clock-check';
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
@@ -108,6 +112,92 @@
 		} finally {
 			scanningDeleted = false;
 			scanDeletedDialogOpen = false;
+		}
+	}
+
+	let autoScanDialogOpen = false;
+	let savingAutoScan = false;
+	let loadingAutoScan = false;
+	// 已保存的自动检查配置（用于按钮上的状态展示）
+	let autoScanConfig: AutoDeleteScanPolicy | null = null;
+	let autoScanFullConfig: Config | null = null;
+	let autoScanEnabled = false;
+	let autoScanIds: number[] = [];
+	let autoScanIntervalHours = 24;
+	$: autoScanAllSelected =
+		submissionSources.length > 0 && submissionSources.every((source) => autoScanIds.includes(source.id));
+	$: autoScanSomeSelected = autoScanIds.length > 0 && !autoScanAllSelected;
+
+	function formatScanInterval(hours: number) {
+		return hours >= 24 && hours % 24 === 0 ? `每${hours / 24}天` : `每${hours}小时`;
+	}
+
+	function selectAllAutoScanSubmissions(checked: boolean) {
+		autoScanIds = checked ? submissionSources.map((source) => source.id) : [];
+	}
+
+	function selectAutoScanSubmission(id: number, checked: boolean) {
+		autoScanIds = checked
+			? [...autoScanIds.filter((selectedId) => selectedId !== id), id]
+			: autoScanIds.filter((selectedId) => selectedId !== id);
+	}
+
+	async function loadAutoScanConfig(): Promise<boolean> {
+		loadingAutoScan = true;
+		try {
+			const result = await api.getConfig();
+			autoScanFullConfig = result.data;
+			const policy = result.data.auto_delete_scan;
+			autoScanConfig = policy;
+			autoScanEnabled = policy.enabled;
+			autoScanIds = [...policy.submission_ids];
+			autoScanIntervalHours = policy.interval_hours > 0 ? policy.interval_hours : 24;
+			return true;
+		} catch (error) {
+			console.error('加载自动检查配置失败：', error);
+			toast.error('加载自动检查配置失败', {
+				description: (error as ApiError).message
+			});
+			return false;
+		} finally {
+			loadingAutoScan = false;
+		}
+	}
+
+	async function openAutoScanDialog() {
+		if (await loadAutoScanConfig()) {
+			autoScanDialogOpen = true;
+		}
+	}
+
+	async function confirmAutoScan() {
+		if (!autoScanFullConfig || !autoScanConfig) return;
+		if (autoScanEnabled && autoScanIntervalHours < 1) {
+			toast.warning('检查间隔必须至少为 1 小时');
+			return;
+		}
+		savingAutoScan = true;
+		const next: AutoDeleteScanPolicy = {
+			enabled: autoScanEnabled,
+			submission_ids: [...autoScanIds],
+			interval_hours: autoScanIntervalHours
+		};
+		try {
+			await api.updateConfig({ ...autoScanFullConfig, auto_delete_scan: next });
+			autoScanConfig = next;
+			toast.success(autoScanEnabled ? '自动检查已开启' : '自动检查已关闭', {
+				description: autoScanEnabled
+					? `将${formatScanInterval(next.interval_hours)}自动检查一次，任务排队等当前视频任务结束后执行，结果见日志页`
+					: undefined
+			});
+			autoScanDialogOpen = false;
+		} catch (error) {
+			console.error('保存自动检查配置失败：', error);
+			toast.error('保存失败', {
+				description: (error as ApiError).message
+			});
+		} finally {
+			savingAutoScan = false;
 		}
 	}
 
@@ -453,6 +543,7 @@
 		]);
 		mounted = true;
 		void loadVideoSources();
+		void loadAutoScanConfig();
 		return () => {
 			mounted = false;
 			videosSequence += 1;
@@ -600,6 +691,19 @@
 			>
 				<RotateCcwIcon class="mr-1.5 h-3 w-3 {resettingAll ? 'animate-spin' : ''}" />
 				{hasFilters ? '重置筛选' : '重置全部'}
+			</Button>
+			<Button
+				size="sm"
+				variant="outline"
+				class="hover:bg-accent hover:text-accent-foreground h-8 cursor-pointer text-xs font-medium"
+				onclick={openAutoScanDialog}
+			>
+				<AlarmClockCheckIcon
+					class="mr-1.5 h-3 w-3 {autoScanConfig?.enabled ? 'text-primary' : ''}"
+				/>
+				{autoScanConfig?.enabled
+					? `自动检查（${formatScanInterval(autoScanConfig.interval_hours)}）`
+					: '自动检查'}
 			</Button>
 			<Button
 				size="sm"
@@ -773,6 +877,96 @@
 					检查中...
 				{:else}
 					开始检查
+				{/if}
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
+
+<AlertDialog.Root bind:open={autoScanDialogOpen}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>自动检查删除/失效</AlertDialog.Title>
+			<AlertDialog.Description>
+				按固定间隔在后台自动执行删除检测：排队等当前视频任务空闲后运行，触发风控会立即停止本轮并等下一个间隔。
+				不勾选任何投稿源时，检查全部启用的投稿源（含之后新增的）。
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+
+		<div class="space-y-4 py-2">
+			<div class="flex items-center justify-between">
+				<Label for="auto-scan-enabled" class="text-sm font-medium">启用自动检查</Label>
+				<Switch
+					id="auto-scan-enabled"
+					bind:checked={autoScanEnabled}
+					disabled={savingAutoScan || loadingAutoScan}
+				/>
+			</div>
+
+			<div class="space-y-2">
+				<div class="flex items-center justify-between">
+					<Label class="text-sm font-medium">检查的投稿源</Label>
+					{#if autoScanIds.length === 0}
+						<span class="text-muted-foreground text-xs">未选择 = 全部启用的投稿源</span>
+					{/if}
+				</div>
+				<div class="flex items-center space-x-2">
+					<Checkbox
+						id="auto-scan-select-all"
+						checked={autoScanAllSelected}
+						indeterminate={autoScanSomeSelected}
+						disabled={savingAutoScan || loadingAutoScan || submissionSources.length === 0}
+						onCheckedChange={selectAllAutoScanSubmissions}
+					/>
+					<Label for="auto-scan-select-all" class="text-sm">全选</Label>
+				</div>
+				<div class="bg-muted max-h-44 space-y-2 overflow-y-auto rounded-md p-3">
+					{#each submissionSources as source (source.id)}
+						<div class="flex items-center space-x-2">
+							<Checkbox
+								id={`auto-scan-submission-${source.id}`}
+								checked={autoScanIds.includes(source.id)}
+								disabled={savingAutoScan || loadingAutoScan}
+								onCheckedChange={(checked) => selectAutoScanSubmission(source.id, checked)}
+							/>
+							<Label for={`auto-scan-submission-${source.id}`} class="text-sm"
+								>{source.name}</Label
+							>
+						</div>
+					{/each}
+					{#if !submissionSources.length}
+						<p class="text-muted-foreground text-sm">暂无投稿源</p>
+					{/if}
+				</div>
+			</div>
+
+			<div class="flex items-center justify-between">
+				<Label for="auto-scan-interval" class="text-sm font-medium">检查间隔</Label>
+				<select
+					id="auto-scan-interval"
+					bind:value={autoScanIntervalHours}
+					disabled={savingAutoScan || loadingAutoScan || !autoScanEnabled}
+					class="border-input bg-background h-8 rounded-md border px-2 text-sm"
+				>
+					{#each [6, 12, 24, 72, 168] as hours (hours)}
+						<option value={hours}>{formatScanInterval(hours)}</option>
+					{/each}
+					{#if ![6, 12, 24, 72, 168].includes(autoScanIntervalHours)}
+						<option value={autoScanIntervalHours}
+							>{formatScanInterval(autoScanIntervalHours)}</option
+						>
+					{/if}
+				</select>
+			</div>
+		</div>
+
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel disabled={savingAutoScan}>取消</AlertDialog.Cancel>
+			<AlertDialog.Action onclick={confirmAutoScan} disabled={savingAutoScan || loadingAutoScan}>
+				{#if savingAutoScan}
+					保存中...
+				{:else}
+					保存
 				{/if}
 			</AlertDialog.Action>
 		</AlertDialog.Footer>

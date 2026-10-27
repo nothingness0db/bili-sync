@@ -233,6 +233,76 @@ async fn scan_sources_for_selection(
     Ok(sources)
 }
 
+/// 执行删除检测：等待当前视频任务结束后逐源检查，风控时提前终止本轮。
+/// trigger 用于日志区分手动/自动触发；调用方需持有 SCAN_DEAD_LOCK 防止并发。
+pub(crate) async fn execute_delete_scan(
+    sources: Vec<submission::Model>,
+    bili_client: Arc<BiliClient>,
+    connection: DatabaseConnection,
+    trigger: &str,
+) {
+    let planned = sources.len();
+    // 独立初始化 wbi 签名密钥（启动后未跑过定时任务时全局密钥可能尚未初始化）
+    {
+        let config = VersionedConfig::get().read();
+        if let Err(e) = ensure_mixin_key(&bili_client, &config.credential).await {
+            warn!("删除检测初始化 wbi 签名密钥失败，本轮停止：{:#}", e);
+            *SCAN_TASK_PROGRESS.write() = ScanTaskProgress::default();
+            return;
+        }
+    }
+    let _task_guard = DownloadTaskManager::get().wait_and_acquire().await;
+    *SCAN_TASK_PROGRESS.write() = ScanTaskProgress {
+        state: "running".to_string(),
+        current: 0,
+        total: planned,
+        ..Default::default()
+    };
+    let config = VersionedConfig::get().read();
+    let (mut scanned, mut deleted, mut restored) = (0, 0, 0);
+    for (idx, source) in sources.into_iter().enumerate() {
+        let video_source: VideoSourceEnum = source.into();
+        {
+            let mut progress = SCAN_TASK_PROGRESS.write();
+            progress.current = idx + 1;
+            progress.current_source = video_source.display_name().to_string();
+        }
+        match detect_deleted_videos(
+            &video_source,
+            &bili_client,
+            &config.credential,
+            &connection,
+            config.try_upower_anyway,
+        )
+        .await
+        {
+            Ok((d, r)) => {
+                scanned += 1;
+                deleted += d;
+                restored += r;
+            }
+            Err(e) => {
+                if e.downcast_ref::<crate::bilibili::BiliError>()
+                    .is_some_and(|error| error.is_risk_control_related())
+                {
+                    warn!(
+                        "检查「{}」视频状态触发风控，本轮停止：{:#}",
+                        video_source.display_name(),
+                        e
+                    );
+                    break;
+                }
+                warn!("检查「{}」视频状态失败：{:#}", video_source.display_name(), e);
+            }
+        }
+    }
+    info!(
+        "{}删除检测完成：扫描 {} 个投稿源，新标记删除 {} 个，恢复有效 {} 个",
+        trigger, scanned, deleted, restored
+    );
+    *SCAN_TASK_PROGRESS.write() = ScanTaskProgress::default();
+}
+
 /// 手动检查视频删除与失效状态，不影响本地文件。
 /// 提交后立即返回，任务排队等当前视频任务结束后在后台执行，结果见日志页。
 pub async fn scan_deleted_videos(
@@ -255,65 +325,7 @@ pub async fn scan_deleted_videos(
     };
     // 后台执行：排队等当前视频任务结束后再跑，不与周期任务抢 API 额度
     tokio::spawn(async move {
-        // 独立初始化 wbi 签名密钥（启动后未跑过定时任务时全局密钥可能尚未初始化）
-        {
-            let config = VersionedConfig::get().read();
-            if let Err(e) = ensure_mixin_key(&bili_client, &config.credential).await {
-                warn!("删除检测初始化 wbi 签名密钥失败，本轮停止：{:#}", e);
-                *SCAN_TASK_PROGRESS.write() = ScanTaskProgress::default();
-                return;
-            }
-        }
-        let _task_guard = DownloadTaskManager::get().wait_and_acquire().await;
-        *SCAN_TASK_PROGRESS.write() = ScanTaskProgress {
-            state: "running".to_string(),
-            current: 0,
-            total: planned,
-            ..Default::default()
-        };
-        let config = VersionedConfig::get().read();
-        let (mut scanned, mut deleted, mut restored) = (0, 0, 0);
-        for (idx, source) in sources.into_iter().enumerate() {
-            let video_source: VideoSourceEnum = source.into();
-            {
-                let mut progress = SCAN_TASK_PROGRESS.write();
-                progress.current = idx + 1;
-                progress.current_source = video_source.display_name().to_string();
-            }
-            match detect_deleted_videos(
-                &video_source,
-                &bili_client,
-                &config.credential,
-                &connection,
-                config.try_upower_anyway,
-            )
-            .await
-            {
-                Ok((d, r)) => {
-                    scanned += 1;
-                    deleted += d;
-                    restored += r;
-                }
-                Err(e) => {
-                    if e.downcast_ref::<crate::bilibili::BiliError>()
-                        .is_some_and(|error| error.is_risk_control_related())
-                    {
-                        warn!(
-                            "检查「{}」视频状态触发风控，本轮停止：{:#}",
-                            video_source.display_name(),
-                            e
-                        );
-                        break;
-                    }
-                    warn!("检查「{}」视频状态失败：{:#}", video_source.display_name(), e);
-                }
-            }
-        }
-        info!(
-            "手动删除检测完成：扫描 {} 个投稿源，新标记删除 {} 个，恢复有效 {} 个",
-            scanned, deleted, restored
-        );
-        *SCAN_TASK_PROGRESS.write() = ScanTaskProgress::default();
+        execute_delete_scan(sources, bili_client, connection, "手动").await;
         // dedup_guard 在任务完成后释放，允许下一次触发
         drop(dedup_guard);
     });
@@ -321,6 +333,50 @@ pub async fn scan_deleted_videos(
         scanned_sources: planned,
         deleted_count: 0,
     }))
+}
+
+/// 自动检查删除失效：按配置间隔对所选投稿源周期执行删除检测。
+/// 与手动检查共用互斥与看板进度；风控时提前终止本轮，等待下一个间隔。
+pub async fn auto_delete_scan_worker(connection: DatabaseConnection, bili_client: Arc<BiliClient>) {
+    let mut last_run: Option<tokio::time::Instant> = None;
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        let config = VersionedConfig::get().snapshot();
+        if config.check().is_err() || !config.auto_delete_scan.enabled {
+            continue;
+        }
+        let interval = std::time::Duration::from_secs(u64::from(config.auto_delete_scan.interval_hours.max(1)) * 3600);
+        if last_run.is_some_and(|at| at.elapsed() < interval) {
+            continue;
+        }
+        // 手动检测（或上一轮自动检测）还在排队/执行时本轮跳过
+        let Ok(_dedup_guard) = SCAN_DEAD_LOCK.try_lock() else {
+            debug!("自动删除检测：已有检测任务在进行中，本轮跳过");
+            continue;
+        };
+        let requested = (!config.auto_delete_scan.submission_ids.is_empty())
+            .then_some(config.auto_delete_scan.submission_ids.as_slice());
+        let Ok(sources) = scan_sources_for_selection(&connection, requested).await else {
+            continue;
+        };
+        if sources.is_empty() {
+            continue;
+        }
+        info!(
+            "自动删除检测：到期待检投稿源 {} 个，排队等当前视频任务结束",
+            sources.len()
+        );
+        // 运行前先记录时间，保证无论本轮结果如何都按完整间隔等待
+        last_run = Some(tokio::time::Instant::now());
+        *SCAN_TASK_PROGRESS.write() = ScanTaskProgress {
+            state: "queued".to_string(),
+            current: 0,
+            total: sources.len(),
+            ..Default::default()
+        };
+        execute_delete_scan(sources, bili_client.clone(), connection.clone(), "自动").await;
+        // _dedup_guard 在本轮结束后释放
+    }
 }
 
 pub async fn reset_video_status(

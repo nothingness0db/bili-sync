@@ -65,7 +65,14 @@ async fn main() {
 
     spawn_task(
         "评论队列",
-        workflow_dynamic::reply_worker(connection.clone(), bili_client),
+        workflow_dynamic::reply_worker(connection.clone(), bili_client.clone()),
+        &tracker,
+        token.clone(),
+    );
+
+    spawn_task(
+        "自动删除检测",
+        api::auto_delete_scan_worker(connection.clone(), bili_client),
         &tracker,
         token.clone(),
     );

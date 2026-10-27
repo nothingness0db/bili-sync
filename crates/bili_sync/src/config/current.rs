@@ -14,7 +14,9 @@ use crate::config::default::{
     default_auth_token, default_bind_address, default_collection_path, default_favorite_path, default_submission_path,
     default_time_format,
 };
-use crate::config::item::{ConcurrentLimit, DanmakuUpdatePolicy, NFOTimeType, SkipOption, Trigger};
+use crate::config::item::{
+    AutoDeleteScanPolicy, ConcurrentLimit, DanmakuUpdatePolicy, NFOTimeType, SkipOption, Trigger,
+};
 use crate::notifier::Notifier;
 use crate::utils::model::{load_db_config, save_db_config};
 
@@ -56,6 +58,8 @@ pub struct Config {
     pub cdn_sorting: bool,
     #[serde(default)]
     pub try_upower_anyway: bool,
+    #[serde(default)]
+    pub auto_delete_scan: AutoDeleteScanPolicy,
     pub version: u64,
 }
 
@@ -112,6 +116,9 @@ impl Config {
         if let Err(error) = self.danmaku_update_policy.validate() {
             errors.push(error);
         }
+        if self.auto_delete_scan.enabled && self.auto_delete_scan.interval_hours < 1 {
+            errors.push("自动检查删除失效的间隔必须至少为 1 小时");
+        }
         if !errors.is_empty() {
             bail!(errors.into_iter().map(|e| format!("- {}", e)).join("\n"));
         }
@@ -143,7 +150,39 @@ impl Default for Config {
             time_format: default_time_format(),
             cdn_sorting: false,
             try_upower_anyway: false,
+            auto_delete_scan: AutoDeleteScanPolicy::default(),
             version: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_credential() -> Credential {
+        Credential {
+            sessdata: "s".into(),
+            bili_jct: "j".into(),
+            buvid3: "b".into(),
+            dedeuserid: "d".into(),
+            ac_time_value: "a".into(),
+        }
+    }
+
+    #[test]
+    fn old_config_without_auto_delete_scan_still_loads() {
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        value.as_object_mut().unwrap().remove("auto_delete_scan");
+        let mut config: Config = serde_json::from_value(value).unwrap();
+        assert!(!config.auto_delete_scan.enabled);
+        assert!(config.auto_delete_scan.submission_ids.is_empty());
+        assert_eq!(config.auto_delete_scan.interval_hours, 0);
+        // 启用但未配置间隔的配置必须被 check 拦截
+        config.credential = valid_credential();
+        config.auto_delete_scan.enabled = true;
+        assert!(config.check().is_err());
+        config.auto_delete_scan.interval_hours = 24;
+        assert!(config.check().is_ok());
     }
 }

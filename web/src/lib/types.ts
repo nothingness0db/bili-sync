@@ -478,6 +478,14 @@ export interface DanmakuUpdatePolicy {
 	milestones: DanmakuUpdateMilestone[];
 }
 
+export interface AutoDeleteScanPolicy {
+	enabled: boolean;
+	/** 要检查的投稿源 id；为空表示检查全部启用的投稿源 */
+	submission_ids: number[];
+	/** 两次检查的最小间隔（小时） */
+	interval_hours: number;
+}
+
 export type DanmakuUpdateMilestone =
 	| { type: 'once'; at_days: number }
 	| { type: 'periodic'; until_days: number; interval_hours: number };
@@ -548,6 +556,7 @@ export interface Config {
 	time_format: string;
 	cdn_sorting: boolean;
 	try_upower_anyway: boolean;
+	auto_delete_scan: AutoDeleteScanPolicy;
 	version: number;
 }
 

@@ -23,7 +23,7 @@ mod video_stats;
 mod videos;
 mod ws;
 
-pub use videos::update_scan_confirm_progress;
+pub use videos::{auto_delete_scan_worker, update_scan_confirm_progress};
 pub use ws::{LogHelper, MAX_HISTORY_LOGS};
 
 pub fn router() -> Router {
