@@ -5,8 +5,9 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 
 // Exercise the production manager with controlled socket events and timers.
+// \r?\n keeps the import strip working on CRLF checkouts (core.autocrlf=true on Windows).
 const source = readFileSync(new URL('../src/lib/ws.ts', import.meta.url), 'utf8').replace(
-	/^import .*;\n/gm,
+	/^import .*;\r?\n/gm,
 	''
 );
 const { outputText } = ts.transpileModule(source, {
