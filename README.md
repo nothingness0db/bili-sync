@@ -26,9 +26,11 @@ bili-eye 是一款 B 站内容监控与存档工具，由 Rust & Tokio 驱动，
 - **数据可视化**：账号指标折线图、逐视频趋势与增长、充电榜进出榜与名次变化
 - **本地视频播放**：在 Web UI 播放已下载的视频，支持分 P 选择、进度拖动与下载；B 站视频失效后仍可访问本地副本
 
-## 继承自上游的功能
+## 功能
 
-以下能力全部来自原项目 [amtoaer/bili-sync](https://github.com/amtoaer/bili-sync)，本项目在其之上扩展：
+> 视频同步（收藏夹 / 合集 / 投稿 / 稍后再看）能力继承自上游，详见 [原项目](https://github.com/amtoaer/bili-sync)。
+
+继承自上游的功能:
 
 - **视频源同步**：收藏夹 / 合集 / UP 主投稿 / 稍后再看，Web UI 添加与管理
 - **视频自动下载**：按画质 / 编码偏好下载视频与音频流，失败自动重试
@@ -38,9 +40,7 @@ bili-eye 是一款 B 站内容监控与存档工具，由 Rust & Tokio 驱动，
 - **通知推送**：Webhook / Telegram
 - **部署**：Docker 镜像 + Web 管理界面
 
-## 功能
-
-> 视频同步（收藏夹 / 合集 / 投稿 / 稍后再看）能力继承自上游，详见 [原项目](https://github.com/amtoaer/bili-sync)。
+本 fork 在此之上新增:
 
 - [x] 动态源管理：Web UI 添加 / 编辑 / 删除 UP 主动态源
 - [x] 全类型动态抓取：图文（DRAW）、纯文字（COMMON_SQUARE）、转发（FORWARD）、视频（AV）
