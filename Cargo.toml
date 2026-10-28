@@ -7,7 +7,7 @@ resolver = "2"
 version = "2.11.1"
 authors = ["amtoaer <amtoaer@gmail.com>"]
 license = "MIT"
-description = "由 Rust & Tokio 驱动的哔哩哔哩同步工具"
+description = "留住 B 站的每一个变化：由 Rust & Tokio 驱动的哔哩哔哩监控与存档工具"
 edition = "2024"
 publish = false
 

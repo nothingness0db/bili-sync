@@ -267,7 +267,7 @@
 </script>
 
 <svelte:head>
-	<title>动态源详情 - Bili Sync</title>
+	<title>动态源详情 - Bili Eye</title>
 </svelte:head>
 
 <div class="space-y-6">

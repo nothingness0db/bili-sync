@@ -177,7 +177,7 @@
 </script>
 
 <svelte:head>
-	<title>动态源管理 - Bili Sync</title>
+	<title>动态源管理 - Bili Eye</title>
 </svelte:head>
 
 <div class="space-y-6">

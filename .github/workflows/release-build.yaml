@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-binary:
-    uses: nothingness0db/bili-sync/.github/workflows/build-binary.yaml@main
+    uses: nothingness0db/bili-eye/.github/workflows/build-binary.yaml@main
   github-release:
     name: Create GitHub Release
     needs: build-binary
@@ -24,7 +24,7 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2.6.2
         with:
-          files: bili-sync-rs*
+          files: bili-eye*
           tag_name: ${{ github.ref_name }}
           draft: true
   docker-release:

@@ -236,7 +236,7 @@
 </script>
 
 <svelte:head>
-	<title>设置 - Bili Sync</title>
+	<title>设置 - Bili Eye</title>
 </svelte:head>
 
 <div class="space-y-6">

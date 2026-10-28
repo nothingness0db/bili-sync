@@ -9,17 +9,17 @@ RUN apk update && apk add --no-cache \
     tzdata \
     ffmpeg
 
-COPY ./bili-sync-rs-Linux-*.tar.gz  ./targets/
+COPY ./bili-eye-Linux-*.tar.gz  ./targets/
 
 RUN if [ "$TARGETPLATFORM" = "linux/amd64" ]; then \
-    tar xzvf ./targets/bili-sync-rs-Linux-x86_64-musl.tar.gz  -C ./; \
+    tar xzvf ./targets/bili-eye-Linux-x86_64-musl.tar.gz  -C ./; \
     elif [ "$TARGETPLATFORM" = "linux/arm/v7" ]; then \
-    tar xzvf ./targets/bili-sync-rs-Linux-armv7-musl.tar.gz  -C ./; \
+    tar xzvf ./targets/bili-eye-Linux-armv7-musl.tar.gz  -C ./; \
     else \
-    tar xzvf ./targets/bili-sync-rs-Linux-aarch64-musl.tar.gz  -C ./; \
+    tar xzvf ./targets/bili-eye-Linux-aarch64-musl.tar.gz  -C ./; \
     fi
 
-RUN rm -rf ./targets && chmod +x ./bili-sync-rs
+RUN rm -rf ./targets && chmod +x ./bili-eye
 
 FROM scratch
 
@@ -33,6 +33,6 @@ ENV LANG=zh_CN.UTF-8 \
 
 COPY --from=base / /
 
-ENTRYPOINT [ "/app/bili-sync-rs" ]
+ENTRYPOINT [ "/app/bili-eye" ]
 
 VOLUME [ "/app/.config/bili-sync" ]

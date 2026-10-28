@@ -210,7 +210,7 @@
 </script>
 
 <svelte:head>
-	<title>仪表盘 - Bili Sync</title>
+	<title>仪表盘 - Bili Eye</title>
 </svelte:head>
 
 <div class="space-y-6">

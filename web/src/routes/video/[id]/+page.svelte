@@ -196,7 +196,7 @@
 </script>
 
 <svelte:head>
-	<title>{videoData?.video.name || '视频详情'} - Bili Sync</title>
+	<title>{videoData?.video.name || '视频详情'} - Bili Eye</title>
 </svelte:head>
 
 <div class="mb-4">

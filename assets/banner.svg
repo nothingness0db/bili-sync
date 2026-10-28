@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" font-family="system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <title>bili-eye — B 站内容监控与存档</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0c1120"/>
+      <stop offset="1" stop-color="#161e34"/>
+    </linearGradient>
+    <radialGradient id="iris" cx="0.35" cy="0.35" r="0.9">
+      <stop offset="0" stop-color="#33c7f2"/>
+      <stop offset="0.55" stop-color="#00a1d6"/>
+      <stop offset="1" stop-color="#123c66"/>
+    </radialGradient>
+    <linearGradient id="pinkline" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff8fb0"/>
+      <stop offset="1" stop-color="#fb7299"/>
+    </linearGradient>
+  </defs>
+
+  <!-- card -->
+  <rect x="1.5" y="1.5" width="1197" height="297" rx="22" fill="url(#bg)" stroke="#2a3a5c" stroke-width="1.5"/>
+
+  <!-- radar rings behind eye -->
+  <circle cx="170" cy="150" r="105" fill="none" stroke="#263450" stroke-width="1.5" stroke-dasharray="4 7"/>
+  <circle cx="170" cy="150" r="132" fill="none" stroke="#1d2a45" stroke-width="1" stroke-dasharray="3 9"/>
+  <path d="M 265.1 105.6 A 105 105 0 0 1 265.1 194.4" fill="none" stroke="#fb7299" stroke-width="3.5" stroke-linecap="round"/>
+
+  <!-- eye -->
+  <path d="M 62 150 C 105 78, 235 78, 278 150 C 235 222, 105 222, 62 150 Z"
+        fill="#0f1626" stroke="#fb7299" stroke-width="5" stroke-linejoin="round"/>
+  <circle cx="170" cy="150" r="34" fill="url(#iris)" stroke="#7fd4f0" stroke-opacity="0.55" stroke-width="1.5"/>
+  <circle cx="170" cy="150" r="13" fill="#081020"/>
+  <circle cx="161" cy="141" r="4" fill="#bfe9ff" opacity="0.9"/>
+  <!-- data pulse passing through the eye -->
+  <path d="M 140 158 L 156 158 L 163 137 L 171 169 L 179 127 L 187 151 L 200 151"
+        fill="none" stroke="url(#pinkline)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- right motif: sampling timeline with a deletion marker -->
+  <g opacity="0.9">
+    <line x1="945" y1="90" x2="945" y2="215" stroke="#22304e" stroke-width="1.5"/>
+    <line x1="945" y1="215" x2="1150" y2="215" stroke="#22304e" stroke-width="1.5"/>
+    <polyline points="960,185 988,158 1014,170 1040,128 1066,145 1092,100 1118,115"
+              fill="none" stroke="#3f5784" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <g fill="#fb7299">
+      <circle cx="960" cy="185" r="4"/><circle cx="988" cy="158" r="4"/>
+      <circle cx="1014" cy="170" r="4"/><circle cx="1040" cy="128" r="4"/>
+      <circle cx="1066" cy="145" r="4"/><circle cx="1092" cy="100" r="4"/>
+      <circle cx="1118" cy="115" r="4"/>
+    </g>
+    <!-- deletion marker: the series stops here -->
+    <line x1="1145" y1="78" x2="1145" y2="215" stroke="#fb7299" stroke-width="2" stroke-dasharray="5 5" opacity="0.75"/>
+    <path d="M 1138 62 L 1152 76 M 1152 62 L 1138 76" stroke="#fb7299" stroke-width="3.5" stroke-linecap="round"/>
+    <text x="1145" y="94" font-size="15" fill="#8fa3c8" text-anchor="end" opacity="0.9">已删除</text>
+  </g>
+
+  <!-- wordmark -->
+  <text x="310" y="172" font-size="88" font-weight="700" letter-spacing="1" fill="#ffffff">bili-<tspan fill="#fb7299">eye</tspan></text>
+
+  <!-- tagline -->
+  <text x="313" y="224" font-size="31" fill="#c7d3ea">留住 B 站的每一个变化</text>
+
+  <!-- feature chips -->
+  <g font-size="19" fill="#8fa3c8">
+    <rect x="312" y="246" width="108" height="34" rx="17" fill="#1a2338" stroke="#2c3d61"/>
+    <text x="366" y="269" text-anchor="middle">删除检测</text>
+    <rect x="432" y="246" width="128" height="34" rx="17" fill="#1a2338" stroke="#2c3d61"/>
+    <text x="496" y="269" text-anchor="middle">逐视频统计</text>
+    <rect x="572" y="246" width="88" height="34" rx="17" fill="#1a2338" stroke="#2c3d61"/>
+    <text x="616" y="269" text-anchor="middle">充电榜</text>
+    <rect x="672" y="246" width="108" height="34" rx="17" fill="#1a2338" stroke="#2c3d61"/>
+    <text x="726" y="269" text-anchor="middle">评论复查</text>
+    <rect x="792" y="246" width="108" height="34" rx="17" fill="#1a2338" stroke="#2c3d61"/>
+    <text x="846" y="269" text-anchor="middle">本地播放</text>
+  </g>
+</svg>

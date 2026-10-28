@@ -556,7 +556,7 @@ import AlarmClockCheckIcon from '@lucide/svelte/icons/alarm-clock-check';
 </script>
 
 <svelte:head>
-	<title>视频 - Bili Sync</title>
+	<title>视频 - Bili Eye</title>
 </svelte:head>
 
 {#if videoSourcesError}

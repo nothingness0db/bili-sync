@@ -1,5 +1,5 @@
 clean:
-    rm -rf ./bili-sync-rs-Linux*.tar.gz
+    rm -rf ./bili-eye-Linux*.tar.gz
 
 build-frontend:
     cd ./web && bun run build && cd ..
@@ -11,13 +11,13 @@ build-debug: build-frontend
     cargo build --target x86_64-unknown-linux-musl
 
 build-docker: build
-    tar czvf ./bili-sync-rs-Linux-x86_64-musl.tar.gz -C ./target/x86_64-unknown-linux-musl/release/ ./bili-sync-rs
-    docker build . -t bili-sync-rs-local --build-arg="TARGETPLATFORM=linux/amd64"
+    tar czvf ./bili-eye-Linux-x86_64-musl.tar.gz -C ./target/x86_64-unknown-linux-musl/release/ ./bili-eye
+    docker build . -t bili-eye-local --build-arg="TARGETPLATFORM=linux/amd64"
     just clean
 
 build-docker-debug: build-debug
-    tar czvf ./bili-sync-rs-Linux-x86_64-musl.tar.gz -C ./target/x86_64-unknown-linux-musl/debug/ ./bili-sync-rs
-    docker build . -t bili-sync-rs-local --build-arg="TARGETPLATFORM=linux/amd64"
+    tar czvf ./bili-eye-Linux-x86_64-musl.tar.gz -C ./target/x86_64-unknown-linux-musl/debug/ ./bili-eye
+    docker build . -t bili-eye-local --build-arg="TARGETPLATFORM=linux/amd64"
     just clean
 
 debug: build-frontend

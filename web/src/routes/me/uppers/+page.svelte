@@ -57,7 +57,7 @@
 </script>
 
 <svelte:head>
-	<title>我关注的 UP 主 - Bili Sync</title>
+	<title>我关注的 UP 主 - Bili Eye</title>
 </svelte:head>
 
 <div>

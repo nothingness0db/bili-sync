@@ -72,5 +72,5 @@ git2 = { workspace = true }
 release = true
 
 [[bin]]
-name = "bili-sync-rs"
+name = "bili-eye"
 path = "src/main.rs"

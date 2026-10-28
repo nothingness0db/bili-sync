@@ -54,7 +54,7 @@
 </script>
 
 <svelte:head>
-	<title>我追的合集 / 收藏夹 - Bili Sync</title>
+	<title>我追的合集 / 收藏夹 - Bili Eye</title>
 </svelte:head>
 
 <div>

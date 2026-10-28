@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import BotIcon from '@lucide/svelte/icons/bot';
+	import EyeIcon from '@lucide/svelte/icons/eye';
 	import ChartPieIcon from '@lucide/svelte/icons/chart-pie';
 	import DatabaseIcon from '@lucide/svelte/icons/database';
 	import FilePlayIcon from '@lucide/svelte/icons/file-play';
@@ -21,9 +21,9 @@
 
 	const data = {
 		header: {
-			title: 'Bili Sync',
-			subtitle: '后台管理系统',
-			icon: BotIcon,
+			title: 'Bili Eye',
+			subtitle: 'B 站监控与存档',
+			icon: EyeIcon,
 			href: '/'
 		},
 		navMain: [

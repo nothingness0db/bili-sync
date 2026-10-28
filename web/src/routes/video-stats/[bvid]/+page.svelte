@@ -20,7 +20,7 @@
 	});
 </script>
 
-<svelte:head><title>{bvid} 视频数据 - Bili Sync</title></svelte:head>
+<svelte:head><title>{bvid} 视频数据 - Bili Eye</title></svelte:head>
 <Button size="sm" variant="outline" href={returnHref}
 	>{hasSource ? '返回动态源详情' : '返回视频列表'}</Button
 >
